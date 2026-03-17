@@ -8131,24 +8131,45 @@ document.getElementById('auth-skip').addEventListener('click', () => {
 
 </script>
 
-<!-- Firebase SDKs loaded last so DOM and app are ready -->
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<!-- Firebase: load sequentially via dynamic script injection -->
 <script>
-  var firebaseConfig = {
-    apiKey: "AIzaSyC4zio4TQLOMKCKqX16ovenP4dWN-973YE",
-    authDomain: "spes-backtester.firebaseapp.com",
-    projectId: "spes-backtester",
-    storageBucket: "spes-backtester.firebasestorage.app",
-    messagingSenderId: "233152304167",
-    appId: "1:233152304167:web:09ead4df168b8ef27a2a02"
-  };
-  firebase.initializeApp(firebaseConfig);
-  var fbAuth = firebase.auth();
-  var fbDb   = firebase.firestore();
-  // Kick off auth state listener now that Firebase is ready
-  initFirebaseAuth();
+(function loadFirebase() {
+  var FIREBASE_VER = '10.12.0';
+  var scripts = [
+    'https://www.gstatic.com/firebasejs/' + FIREBASE_VER + '/firebase-app-compat.js',
+    'https://www.gstatic.com/firebasejs/' + FIREBASE_VER + '/firebase-auth-compat.js',
+    'https://www.gstatic.com/firebasejs/' + FIREBASE_VER + '/firebase-firestore-compat.js',
+  ];
+  var loaded = 0;
+  function loadNext(i) {
+    if (i >= scripts.length) {
+      // All loaded — init Firebase
+      try {
+        var firebaseConfig = {
+          apiKey: "AIzaSyC4zio4TQLOMKCKqX16ovenP4dWN-973YE",
+          authDomain: "spes-backtester.firebaseapp.com",
+          projectId: "spes-backtester",
+          storageBucket: "spes-backtester.firebasestorage.app",
+          messagingSenderId: "233152304167",
+          appId: "1:233152304167:web:09ead4df168b8ef27a2a02"
+        };
+        firebase.initializeApp(firebaseConfig);
+        window.fbAuth = firebase.auth();
+        window.fbDb   = firebase.firestore();
+        initFirebaseAuth();
+      } catch(e) {
+        console.warn('SPES: Firebase init failed', e);
+      }
+      return;
+    }
+    var s = document.createElement('script');
+    s.src = scripts[i];
+    s.onload = function() { loadNext(i + 1); };
+    s.onerror = function() { console.warn('SPES: Failed to load', scripts[i]); };
+    document.body.appendChild(s);
+  }
+  loadNext(0);
+})();
 </script>
 </body>
 </html>
