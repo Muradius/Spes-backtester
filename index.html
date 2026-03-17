@@ -7768,10 +7768,16 @@ const SPES_APP_KEY = 'spes_app_state_v1';
 
 function saveAppState(){
   try{
+    // Strip non-serialisable private fields from indicators before saving
+    const indicatorsToSave = (state.indicators||[]).map(ind => {
+      const {_tfData, _cache, ...rest} = ind;
+      return rest;
+    });
     const payload = {
       strategyBuilder: JSON.parse(JSON.stringify(state.strategyBuilder)),
       riskProfiles:    JSON.parse(JSON.stringify(state.riskProfiles)),
       savedStrategies: JSON.parse(JSON.stringify(state.savedStrategies)),
+      indicators:      JSON.parse(JSON.stringify(indicatorsToSave)),
       kellySettings:   JSON.parse(JSON.stringify(state.kellySettings||{})),
       pyrSettings:     JSON.parse(JSON.stringify(state.pyrSettings||{})),
       elfPyrSettings:  JSON.parse(JSON.stringify(state.elfPyrSettings||{})),
@@ -7809,6 +7815,10 @@ function loadAppState(){
     // Saved strategies
     if(Array.isArray(s.savedStrategies)){
       state.savedStrategies = s.savedStrategies;
+    }
+    // Indicators
+    if(Array.isArray(s.indicators) && s.indicators.length){
+      state.indicators = s.indicators;
     }
     // Strategy builder
     if(s.strategyBuilder && typeof s.strategyBuilder === 'object'){
@@ -8079,16 +8089,22 @@ async function cloudLoad() {
       return;
     }
     const s = doc.data();
-    // Apply loaded state (same logic as loadAppState)
+
+    // ── Apply state ──────────────────────────────────────
     if (Array.isArray(s.riskProfiles) && s.riskProfiles.length) {
       state.riskProfiles = s.riskProfiles;
     }
     if (Array.isArray(s.savedStrategies)) {
       state.savedStrategies = s.savedStrategies;
     }
+    // Indicators
+    if (Array.isArray(s.indicators) && s.indicators.length) {
+      state.indicators = s.indicators;
+    }
     if (s.strategyBuilder && typeof s.strategyBuilder === 'object') {
       Object.assign(state.strategyBuilder, s.strategyBuilder);
       if (!state.strategyBuilder.exitMode) state.strategyBuilder.exitMode = 'fixed';
+      if (!state.strategyBuilder.exitParams) state.strategyBuilder.exitParams = {};
       if (!state.strategyBuilder.exitParams.elfTpMult) state.strategyBuilder.exitParams.elfTpMult = 2.0;
     }
     if (s.kellySettings)  Object.assign(state.kellySettings  = state.kellySettings  || {}, s.kellySettings);
@@ -8104,13 +8120,16 @@ async function cloudLoad() {
     if (s.asset) state.asset = s.asset;
     if (s.assetName) state.assetName = s.assetName;
     if (s.tf) state.tf = s.tf;
+
     // Also sync to localStorage as backup
     localStorage.setItem(SPES_APP_KEY, JSON.stringify(s));
-    // Refresh chart with loaded data
-    setTimeout(async () => {
-      resizeCanvas();
-      await loadChartData();
-    }, 100);
+
+    // ── Refresh all UI components ──────────────────────────
+    refreshAllUI();
+
+    // Reload chart data with restored asset/tf
+    await loadChartData();
+
     const el = document.getElementById('cloud-status');
     if (el) { el.textContent = '☁ synced'; el.className = 'saved'; }
     setTimeout(() => {
@@ -8119,6 +8138,48 @@ async function cloudLoad() {
     }, 2000);
   } catch(e) {
     console.warn('SPES: cloud load failed', e);
+  }
+}
+
+function refreshAllUI() {
+  try {
+    // Re-render active indicators list
+    if (typeof renderActiveInds === 'function') renderActiveInds();
+    if (typeof renderMyIndicators === 'function') renderMyIndicators();
+    if (typeof updateRPIndicators === 'function') updateRPIndicators();
+
+    // Re-render saved strategies list
+    if (typeof renderSavedStrategies === 'function') renderSavedStrategies();
+
+    // Re-render risk profiles list
+    if (typeof renderRiskProfilesList === 'function') renderRiskProfilesList();
+    if (typeof renderRiskProfiles === 'function') renderRiskProfiles();
+
+    // Always rebuild strategy modal so saved strategies appear
+    if (typeof buildStrategyModal === 'function') buildStrategyModal();
+
+    // Update topbar pair label
+    const pairEl = document.getElementById('tb-pair');
+    if (pairEl && state.assetName) pairEl.textContent = state.assetName;
+
+    // Update timeframe buttons
+    if (state.tf) {
+      document.querySelectorAll('.tf-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.tf === state.tf);
+      });
+    }
+
+    // Restore rail button states (slippage / funding)
+    const rb = document.getElementById('rail-btsettings');
+    const slipOn = !!state.backtestSettings?.slippage?.enabled;
+    const fundOn = !!state.backtestSettings?.funding?.enabled;
+    if (rb) rb.classList.toggle('active', slipOn || fundOn);
+
+    // Redraw chart with restored indicators
+    if (typeof drawChart === 'function') drawChart();
+
+  } catch(e) {
+    console.warn('SPES: refreshAllUI failed', e);
   }
 }
 
