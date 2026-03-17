@@ -5,6 +5,23 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <meta name="google-site-verification" content="JIjQHXDnOXFcYQBPM2Sgtx_u9c5ct2eqiOZxtIVS5X4" />
 <title>SPES — Strategy Backtester</title>
+<!-- Firebase SDKs -->
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script>
+  const firebaseConfig = {
+    apiKey: "AIzaSyC4zio4TQLOMKCKqX16ovenP4dWN-973YE",
+    authDomain: "spes-backtester.firebaseapp.com",
+    projectId: "spes-backtester",
+    storageBucket: "spes-backtester.firebasestorage.app",
+    messagingSenderId: "233152304167",
+    appId: "1:233152304167:web:09ead4df168b8ef27a2a02"
+  };
+  firebase.initializeApp(firebaseConfig);
+  const fbAuth = firebase.auth();
+  const fbDb   = firebase.firestore();
+</script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;700&family=Inter:wght@300;400;500;600;700;900&display=swap');
 @font-face {
@@ -379,9 +396,74 @@ input:checked+.tslider::before{transform:translateX(16px);background:var(--accen
 /* Scrollbar */
 body::-webkit-scrollbar{width:6px}
 body::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px}
+
+/* ── FIREBASE AUTH UI ── */
+#auth-overlay{
+  position:fixed;inset:0;z-index:99999;
+  background:rgba(8,14,22,0.97);
+  display:flex;align-items:center;justify-content:center;
+  flex-direction:column;gap:20px;
+}
+#auth-overlay.hidden{display:none}
+.auth-card{
+  background:var(--panel);border:1px solid var(--border2);border-radius:16px;
+  padding:40px 48px;display:flex;flex-direction:column;align-items:center;gap:24px;
+  max-width:380px;width:90%;
+}
+.auth-logo{font-size:28px;font-weight:900;letter-spacing:6px;color:var(--accent)}
+.auth-logo span{color:var(--accent2)}
+.auth-title{font-size:15px;color:var(--muted);text-align:center;line-height:1.6}
+.auth-google-btn{
+  display:flex;align-items:center;gap:12px;
+  background:#fff;color:#1a1a1a;border:none;border-radius:8px;
+  padding:12px 24px;font-size:14px;font-weight:600;cursor:pointer;
+  width:100%;justify-content:center;transition:opacity .2s;
+}
+.auth-google-btn:hover{opacity:.9}
+.auth-google-btn img{width:20px;height:20px}
+.auth-skip{font-size:12px;color:var(--muted2);cursor:pointer;text-decoration:underline;margin-top:-8px}
+.auth-skip:hover{color:var(--muted)}
+#user-badge{
+  display:flex;align-items:center;gap:8px;cursor:pointer;
+  padding:4px 10px;border-radius:20px;border:1px solid var(--border);
+  background:var(--surface);transition:border-color .2s;
+  margin-left:8px;
+}
+#user-badge:hover{border-color:var(--border2)}
+#user-badge img{width:22px;height:22px;border-radius:50%}
+#user-badge span{font-size:11px;color:var(--muted);max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#user-badge.hidden{display:none}
+#sign-in-btn{
+  font-size:11px;color:var(--accent);cursor:pointer;padding:4px 10px;
+  border:1px solid var(--accent);border-radius:20px;background:transparent;
+  margin-left:8px;transition:background .2s,color .2s;
+}
+#sign-in-btn:hover{background:var(--accent);color:#000}
+#sign-in-btn.hidden{display:none}
+#cloud-status{
+  font-size:10px;color:var(--muted2);display:flex;align-items:center;gap:4px;
+  margin-left:4px;
+}
+#cloud-status.saving{color:var(--accent2)}
+#cloud-status.saved{color:var(--green)}
+#cloud-status.hidden{display:none}
 </style>
 </head>
 <body>
+
+
+<!-- ── FIREBASE AUTH OVERLAY ── -->
+<div id="auth-overlay">
+  <div class="auth-card">
+    <div class="auth-logo">SPES <span>◈</span></div>
+    <div class="auth-title">Sign in to sync your indicators,<br>strategies and settings across all devices.</div>
+    <button class="auth-google-btn" id="auth-google-btn">
+      <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google"/>
+      Continue with Google
+    </button>
+    <span class="auth-skip" id="auth-skip">Use without signing in</span>
+  </div>
+</div>
 
 <div id="site-bg"></div>
 
@@ -406,6 +488,14 @@ body::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px}
     <div class="topbar-stat"><span>HIGH</span><span id="tb-high" style="color:var(--green)">—</span></div>
     <div class="topbar-stat"><span>LOW</span><span id="tb-low" style="color:var(--red)">—</span></div>
     <div class="topbar-stat"><span>VOL</span><span id="tb-vol">—</span></div>
+    <div style="display:flex;align-items:center;margin-left:8px">
+      <button id="sign-in-btn" onclick="spesSignIn()">⬆ Sign In</button>
+      <div id="user-badge" class="hidden" onclick="spesSignOut()">
+        <img id="user-avatar" src="" alt=""/>
+        <span id="user-name"></span>
+      </div>
+      <div id="cloud-status" class="hidden">☁ saved</div>
+    </div>
     <div class="topbar-right">
       <button title="Clear all saved settings (strategies, profiles, risk)" onclick="if(confirm('Clear all saved SPES settings? This cannot be undone.')){localStorage.removeItem('spes_app_state_v1');location.reload();}" style="background:none;border:1px solid var(--border2);color:var(--muted);padding:4px 10px;font-size:9px;letter-spacing:1px;border-radius:2px;cursor:pointer;transition:all .18s;text-transform:uppercase" onmouseover="this.style.color='var(--red)';this.style.borderColor='var(--red)'" onmouseout="this.style.color='var(--muted)';this.style.borderColor='var(--border2)'">↺ Reset State</button>
       <button class="run-btn" onclick="openModal('backtest')">▶ RUN BACKTEST</button>
@@ -7718,6 +7808,7 @@ function saveAppState(){
       tf:         state.tf || document.querySelector('.tf-btn.active')?.dataset?.tf || '1h',
     };
     localStorage.setItem(SPES_APP_KEY, JSON.stringify(payload));
+    if(typeof cloudSaveDebounced==='function') cloudSaveDebounced();
   }catch(e){ console.warn('SPES: could not save app state', e); }
 }
 
@@ -7895,6 +7986,163 @@ setTimeout(async()=>{
   resizeCanvas();
   await loadChartData();
 },100);
+
+// ═══════════════════════════════════════════════════════
+// FIREBASE AUTH & CLOUD SYNC
+// ═══════════════════════════════════════════════════════
+let spesUser = null;
+let cloudSaveTimer = null;
+
+// Show/hide auth overlay on load
+fbAuth.onAuthStateChanged(async (user) => {
+  if (user) {
+    spesUser = user;
+    // Update UI
+    document.getElementById('auth-overlay').classList.add('hidden');
+    document.getElementById('sign-in-btn').classList.add('hidden');
+    document.getElementById('user-badge').classList.remove('hidden');
+    document.getElementById('cloud-status').classList.remove('hidden');
+    const avatar = document.getElementById('user-avatar');
+    if (user.photoURL) avatar.src = user.photoURL;
+    document.getElementById('user-name').textContent = user.displayName || user.email;
+    // Load cloud state (overrides localStorage)
+    await cloudLoad();
+  } else {
+    spesUser = null;
+    document.getElementById('sign-in-btn').classList.remove('hidden');
+    document.getElementById('user-badge').classList.add('hidden');
+    document.getElementById('cloud-status').classList.add('hidden');
+  }
+});
+
+async function spesSignIn() {
+  const provider = new firebase.auth.GoogleAuthProvider();
+  try {
+    await fbAuth.signInWithPopup(provider);
+  } catch(e) {
+    console.warn('SPES: sign-in failed', e);
+  }
+}
+
+async function spesSignOut() {
+  if (!confirm('Sign out? Your settings will no longer sync until you sign back in.')) return;
+  await fbAuth.signOut();
+  document.getElementById('sign-in-btn').classList.remove('hidden');
+  document.getElementById('user-badge').classList.add('hidden');
+  document.getElementById('cloud-status').classList.add('hidden');
+}
+
+// Cloud save — debounced so it doesn't fire on every keystroke
+function cloudSaveDebounced() {
+  if (!spesUser) return;
+  clearTimeout(cloudSaveTimer);
+  const el = document.getElementById('cloud-status');
+  if (el) { el.textContent = '☁ saving…'; el.className = 'saving'; }
+  cloudSaveTimer = setTimeout(async () => {
+    await cloudSave();
+  }, 1500);
+}
+
+async function cloudSave() {
+  if (!spesUser) return;
+  try {
+    const payload = {
+      strategyBuilder: JSON.parse(JSON.stringify(state.strategyBuilder)),
+      riskProfiles:    JSON.parse(JSON.stringify(state.riskProfiles)),
+      savedStrategies: JSON.parse(JSON.stringify(state.savedStrategies)),
+      kellySettings:   JSON.parse(JSON.stringify(state.kellySettings||{})),
+      pyrSettings:     JSON.parse(JSON.stringify(state.pyrSettings||{})),
+      elfPyrSettings:  JSON.parse(JSON.stringify(state.elfPyrSettings||{})),
+      risk: {
+        capital:    state.risk.capital,
+        risk:       state.risk.risk,
+        sizing:     state.risk.sizing,
+        spread:     state.risk.spread,
+        trailing:   state.risk.trailing,
+        allowShort: state.risk.allowShort,
+        pyramid:    state.risk.pyramid,
+        maxTrades:  state.risk.maxTrades,
+        maxLoss:    state.risk.maxLoss,
+      },
+      backtestSettings: JSON.parse(JSON.stringify(state.backtestSettings)),
+      asset:     state.asset,
+      assetName: state.assetName,
+      tf:        state.tf || '1h',
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    };
+    await fbDb.collection('users').doc(spesUser.uid).set(payload);
+    const el = document.getElementById('cloud-status');
+    if (el) { el.textContent = '☁ saved'; el.className = 'saved'; }
+    setTimeout(() => {
+      const el2 = document.getElementById('cloud-status');
+      if (el2) { el2.textContent = '☁'; el2.className = ''; }
+    }, 2000);
+  } catch(e) {
+    console.warn('SPES: cloud save failed', e);
+    const el = document.getElementById('cloud-status');
+    if (el) { el.textContent = '☁ error'; el.className = ''; }
+  }
+}
+
+async function cloudLoad() {
+  if (!spesUser) return;
+  try {
+    const doc = await fbDb.collection('users').doc(spesUser.uid).get();
+    if (!doc.exists) {
+      // First time — push local state to cloud
+      await cloudSave();
+      return;
+    }
+    const s = doc.data();
+    // Apply loaded state (same logic as loadAppState)
+    if (Array.isArray(s.riskProfiles) && s.riskProfiles.length) {
+      state.riskProfiles = s.riskProfiles;
+    }
+    if (Array.isArray(s.savedStrategies)) {
+      state.savedStrategies = s.savedStrategies;
+    }
+    if (s.strategyBuilder && typeof s.strategyBuilder === 'object') {
+      Object.assign(state.strategyBuilder, s.strategyBuilder);
+      if (!state.strategyBuilder.exitMode) state.strategyBuilder.exitMode = 'fixed';
+      if (!state.strategyBuilder.exitParams.elfTpMult) state.strategyBuilder.exitParams.elfTpMult = 2.0;
+    }
+    if (s.kellySettings)  Object.assign(state.kellySettings  = state.kellySettings  || {}, s.kellySettings);
+    if (s.pyrSettings)    Object.assign(state.pyrSettings    = state.pyrSettings    || {}, s.pyrSettings);
+    if (s.elfPyrSettings) Object.assign(state.elfPyrSettings = state.elfPyrSettings || {}, s.elfPyrSettings);
+    if (s.risk && typeof s.risk === 'object') {
+      Object.assign(state.risk, s.risk);
+    }
+    if (s.backtestSettings && typeof s.backtestSettings === 'object') {
+      if (s.backtestSettings.slippage) Object.assign(state.backtestSettings.slippage, s.backtestSettings.slippage);
+      if (s.backtestSettings.funding)  Object.assign(state.backtestSettings.funding,  s.backtestSettings.funding);
+    }
+    if (s.asset) state.asset = s.asset;
+    if (s.assetName) state.assetName = s.assetName;
+    if (s.tf) state.tf = s.tf;
+    // Also sync to localStorage as backup
+    localStorage.setItem(SPES_APP_KEY, JSON.stringify(s));
+    // Refresh chart with loaded data
+    setTimeout(async () => {
+      resizeCanvas();
+      await loadChartData();
+    }, 100);
+    const el = document.getElementById('cloud-status');
+    if (el) { el.textContent = '☁ synced'; el.className = 'saved'; }
+    setTimeout(() => {
+      const el2 = document.getElementById('cloud-status');
+      if (el2) { el2.textContent = '☁'; el2.className = ''; }
+    }, 2000);
+  } catch(e) {
+    console.warn('SPES: cloud load failed', e);
+  }
+}
+
+// Auth overlay buttons
+document.getElementById('auth-google-btn').addEventListener('click', spesSignIn);
+document.getElementById('auth-skip').addEventListener('click', () => {
+  document.getElementById('auth-overlay').classList.add('hidden');
+});
+
 </script>
 </body>
 </html>
