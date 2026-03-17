@@ -5,23 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <meta name="google-site-verification" content="JIjQHXDnOXFcYQBPM2Sgtx_u9c5ct2eqiOZxtIVS5X4" />
 <title>SPES — Strategy Backtester</title>
-<!-- Firebase SDKs -->
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
-<script>
-  const firebaseConfig = {
-    apiKey: "AIzaSyC4zio4TQLOMKCKqX16ovenP4dWN-973YE",
-    authDomain: "spes-backtester.firebaseapp.com",
-    projectId: "spes-backtester",
-    storageBucket: "spes-backtester.firebasestorage.app",
-    messagingSenderId: "233152304167",
-    appId: "1:233152304167:web:09ead4df168b8ef27a2a02"
-  };
-  firebase.initializeApp(firebaseConfig);
-  const fbAuth = firebase.auth();
-  const fbDb   = firebase.firestore();
-</script>
+
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;700&family=Inter:wght@300;400;500;600;700;900&display=swap');
 @font-face {
@@ -7990,9 +7974,10 @@ setTimeout(async()=>{
 // ═══════════════════════════════════════════════════════
 // FIREBASE AUTH & CLOUD SYNC
 // ═══════════════════════════════════════════════════════
-let spesUser = null;
-let cloudSaveTimer = null;
+var spesUser = null;
+var cloudSaveTimer = null;
 
+function initFirebaseAuth() {
 // Show/hide auth overlay on load
 fbAuth.onAuthStateChanged(async (user) => {
   if (user) {
@@ -8142,7 +8127,28 @@ document.getElementById('auth-google-btn').addEventListener('click', spesSignIn)
 document.getElementById('auth-skip').addEventListener('click', () => {
   document.getElementById('auth-overlay').classList.add('hidden');
 });
+} // end initFirebaseAuth
 
+</script>
+
+<!-- Firebase SDKs loaded last so DOM and app are ready -->
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script>
+  var firebaseConfig = {
+    apiKey: "AIzaSyC4zio4TQLOMKCKqX16ovenP4dWN-973YE",
+    authDomain: "spes-backtester.firebaseapp.com",
+    projectId: "spes-backtester",
+    storageBucket: "spes-backtester.firebasestorage.app",
+    messagingSenderId: "233152304167",
+    appId: "1:233152304167:web:09ead4df168b8ef27a2a02"
+  };
+  firebase.initializeApp(firebaseConfig);
+  var fbAuth = firebase.auth();
+  var fbDb   = firebase.firestore();
+  // Kick off auth state listener now that Firebase is ready
+  initFirebaseAuth();
 </script>
 </body>
 </html>
