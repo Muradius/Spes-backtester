@@ -107,7 +107,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
 .tf-btn.active{background:rgba(0,212,255,.12);color:var(--accent)}
 .chart-sep{width:1px;height:16px;background:var(--border);margin:0 6px}
 .chart-canvas-wrap{flex:1;position:relative}
-#mainCanvas{width:100%;height:100%;display:block}
+#mainCanvas{width:100%;height:100%;display:block;image-rendering:crisp-edges;image-rendering:-webkit-optimize-contrast;image-rendering:pixelated}
 
 /* Right Panel */
 .rpanel{background:rgba(13,22,32,0.88);border-left:1px solid var(--border);overflow-y:auto;display:flex;flex-direction:column}
@@ -428,12 +428,6 @@ body::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px}
   font-size:9px;font-weight:700;letter-spacing:2px;color:var(--accent);padding:2px 10px;
   pointer-events:none;text-transform:uppercase;
 }
-/* Veil overlay — hides future bars during replay */
-#replay-veil{
-  position:absolute;top:0;bottom:0;right:0;pointer-events:none;z-index:5;
-  background:rgba(8,14,22,0.85);display:none;
-  border-left:1px solid rgba(0,212,255,.2);
-}
 /* Chart toolbar replay set-start button */
 #btn-replay-set{
   background:none;border:1px solid var(--border2);color:var(--muted);
@@ -608,7 +602,6 @@ body::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px}
     </div>
     <div class="chart-canvas-wrap" style="position:relative">
       <canvas id="mainCanvas"></canvas>
-      <div id="replay-veil"></div>
       <div id="replay-mode-badge">REPLAY</div>
     </div>
     <!-- REPLAY CONTROL BAR -->
@@ -905,11 +898,18 @@ return calculate(closes, highs, lows, data);</textarea>
         <div class="row2" style="margin-bottom:10px">
           <div class="field">
             <label>Start Date</label>
-            <input type="date" id="dr-start-date" style="font-family:var(--font-mono);font-size:11px"/>
+            <input type="date" id="dr-start-date"
+              style="font-family:var(--font-mono);font-size:11px"
+              oninput="onStartDateInput()"/>
           </div>
           <div class="field">
-            <label>End Date</label>
-            <input type="date" id="dr-end-date" style="font-family:var(--font-mono);font-size:11px"/>
+            <label style="display:flex;align-items:center;gap:6px">
+              End Date
+              <span id="dr-end-auto-badge" style="display:none;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:var(--accent2);background:rgba(232,213,163,.1);border:1px solid rgba(232,213,163,.25);padding:1px 6px;border-radius:2px">AUTO</span>
+            </label>
+            <input type="date" id="dr-end-date"
+              style="font-family:var(--font-mono);font-size:11px"
+              oninput="onEndDateManualInput()"/>
           </div>
         </div>
         <div class="row2" style="margin-bottom:10px">
@@ -923,7 +923,8 @@ return calculate(closes, highs, lows, data);</textarea>
           </div>
           <div class="field">
             <label>Max Bars (API cap)</label>
-            <input type="number" id="dr-max-bars" value="5000" min="100" max="5000" step="100"/>
+            <input type="number" id="dr-max-bars" value="5000" min="100" max="5000" step="100"
+              oninput="onStartDateInput()"/>
           </div>
         </div>
         <!-- Quick range presets -->
@@ -937,7 +938,7 @@ return calculate(closes, highs, lows, data);</textarea>
           </div>
         </div>
         <div id="dr-estimate" style="font-size:9px;color:var(--muted);padding:8px 10px;background:rgba(0,0,0,.3);border-radius:3px;border:1px solid var(--border);line-height:1.7">
-          Select a date range to see estimated bar count.
+          Select a start date — the end date will be calculated automatically from your bar count and timeframe.
         </div>
       </div>
     </div>
@@ -2106,19 +2107,24 @@ let _crosshairMx=null,_crosshairMy=null;
 
 function resizeCanvas(){
   const wrap=canvas.parentElement;
-  canvas.width=wrap.clientWidth*devicePixelRatio;
-  canvas.height=wrap.clientHeight*devicePixelRatio;
+  const dpr=devicePixelRatio;
+  canvas.width=wrap.clientWidth*dpr;
+  canvas.height=wrap.clientHeight*dpr;
   canvas.style.width=wrap.clientWidth+'px';
   canvas.style.height=wrap.clientHeight+'px';
   drawChart();
-  if(state.replay?.active) replayApplyVeil();
 }
 
 function drawChart(){
   const W=canvas.width,H=canvas.height,dpr=devicePixelRatio;
   ctx.clearRect(0,0,W,H);
-  const data=state.priceData;
+  // In replay mode, only reveal bars up to and including currentBar
+  const data = (state.replay?.active)
+    ? state.priceData.slice(0, state.replay.currentBar + 1)
+    : state.priceData;
   if(!data.length)return;
+  ctx.save();
+  ctx.imageSmoothingEnabled = false;
 
   const padL=60*dpr,padR=20*dpr,padT=20*dpr,padB=40*dpr;
   const plotW=W-padL-padR,plotH=H-padT-padB;
@@ -2141,7 +2147,7 @@ function drawChart(){
   // ── Panel layout ──
   // Each subpanel indicator gets its own lane (25% of plotH each, max 3)
   const subpanelInds = state.indicators.filter(i=>{
-    if(['RSI','MACD','Stoch','CCI'].includes(i.type)) return true;
+    if(['RSI','MACD','Stoch','CCI','ATR'].includes(i.type)) return true;
     if(i.type==='CUSTOM' && i.isOverlay===false) return true;
     return false;
   });
@@ -2172,13 +2178,14 @@ function drawChart(){
   });
 
   // Price labels — main panel only (stop at mainH boundary)
-  ctx.fillStyle='rgba(90,122,153,0.8)';ctx.font=`${9*dpr}px 'Roboto Mono'`;ctx.textAlign='right';
+  ctx.fillStyle='rgba(90,122,153,0.8)';ctx.font=`${9*dpr}px Arial`;ctx.textAlign='right';ctx.textBaseline='middle';
   for(let g=0;g<=6;g++){
     const y=padT+g*(mainH/6);
     if(y > padT+mainH) continue; // don't draw into subpanels
     const price=hi-g*(pr/6);
-    ctx.fillText(formatPrice(price,state.asset),padL-4*dpr,y+3*dpr);
+    ctx.fillText(formatPrice(price,state.asset),padL-4*dpr,y);
   }
+  ctx.textBaseline='alphabetic';
 
   // Grid — main panel only
   ctx.strokeStyle=`rgba(26,37,53,${dpr*.8})`;ctx.lineWidth=1;
@@ -2288,7 +2295,7 @@ function drawChart(){
     const nRows=tfRows.length+1; // +1 header
 
     ctx.save();
-    ctx.font=`bold ${7*dpr}px 'Roboto Mono'`;
+    ctx.font=`bold ${7*dpr}px Arial`;
 
     // ── Trend table ──
     // Header
@@ -2399,8 +2406,8 @@ function drawChart(){
         const y=tYS(lvl,0,100);
         ctx.strokeStyle=col;ctx.lineWidth=1;ctx.setLineDash([3*dpr,3*dpr]);
         ctx.beginPath();ctx.moveTo(padL,y);ctx.lineTo(W-padR,y);ctx.stroke();
-        ctx.fillStyle='rgba(90,122,153,0.7)';ctx.font=`${7*dpr}px 'Roboto Mono'`;ctx.textAlign='right';
-        ctx.fillText(lvl,padL-3*dpr,y+3*dpr);
+        ctx.fillStyle='rgba(90,122,153,0.7)';ctx.font=`${7*dpr}px Arial`;ctx.textAlign='right';
+        ctx.textBaseline="middle";ctx.fillText(lvl,padL-3*dpr,y);ctx.textBaseline="alphabetic";
       });
       ctx.setLineDash([]);
 
@@ -2465,7 +2472,7 @@ function drawChart(){
           if(data[g2].l<data[g1].l&&slicedRSI[i2]>slicedRSI[i1]){
             ctx.strokeStyle='rgba(0,230,118,0.8)';ctx.lineWidth=2*dpr;ctx.setLineDash([]);
             ctx.beginPath();ctx.moveTo(toX(i1),tYS(slicedRSI[i1],0,100));ctx.lineTo(toX(i2),tYS(slicedRSI[i2],0,100));ctx.stroke();
-            ctx.fillStyle='#00e676';ctx.font=`bold ${8*dpr}px 'Roboto Mono'`;ctx.textAlign='center';
+            ctx.fillStyle='#00e676';ctx.font=`bold ${8*dpr}px Arial`;ctx.textAlign='center';
             ctx.fillText('Bull',toX(i2),tYS(slicedRSI[i2],0,100)+12*dpr);
           }
         }
@@ -2476,13 +2483,13 @@ function drawChart(){
           if(data[g2].h>data[g1].h&&slicedRSI[i2]<slicedRSI[i1]){
             ctx.strokeStyle='rgba(255,77,109,0.8)';ctx.lineWidth=2*dpr;ctx.setLineDash([]);
             ctx.beginPath();ctx.moveTo(toX(i1),tYS(slicedRSI[i1],0,100));ctx.lineTo(toX(i2),tYS(slicedRSI[i2],0,100));ctx.stroke();
-            ctx.fillStyle='#ff4d6d';ctx.font=`bold ${8*dpr}px 'Roboto Mono'`;ctx.textAlign='center';
+            ctx.fillStyle='#ff4d6d';ctx.font=`bold ${8*dpr}px Arial`;ctx.textAlign='center';
             ctx.fillText('Bear',toX(i2),tYS(slicedRSI[i2],0,100)-6*dpr);
           }
         }
       }
       const lastRSI=slicedRSI.filter(v=>v!=null).slice(-1)[0];
-      ctx.fillStyle='#7E57C2';ctx.font=`bold ${8*dpr}px 'Roboto Mono'`;ctx.textAlign='left';ctx.setLineDash([]);
+      ctx.fillStyle='#7E57C2';ctx.font=`bold ${8*dpr}px Arial`;ctx.textAlign='left';ctx.setLineDash([]);
       ctx.fillText(`RSI(${period}) ${lastRSI?lastRSI.toFixed(1):''}`,padL+4*dpr,top+11*dpr);
 
     } else if(ind.type==='MACD'){
@@ -2511,7 +2518,7 @@ function drawChart(){
       ctx.beginPath();f=true;
       vals.forEach((v,i)=>{if(!v){f=true;return}const x=toX(i),y=tYS(v.signal,vMin,vMax);if(f){ctx.moveTo(x,y);f=false}else ctx.lineTo(x,y);});ctx.stroke();
       const lastV=vals.filter(v=>v!=null).slice(-1)[0];
-      ctx.fillStyle='#4d9fff';ctx.font=`bold ${8*dpr}px 'Roboto Mono'`;ctx.textAlign='left';
+      ctx.fillStyle='#4d9fff';ctx.font=`bold ${8*dpr}px Arial`;ctx.textAlign='left';
       ctx.fillText(`MACD(${ind.params?.fast||12},${ind.params?.slow||26},${ind.params?.sig||9}) ${lastV?lastV.macd.toFixed(2):''}`,padL+4*dpr,top+11*dpr);
 
     } else if(ind.type==='Stoch'){
@@ -2519,15 +2526,15 @@ function drawChart(){
       [20,80].forEach(lvl=>{
         ctx.strokeStyle='rgba(255,255,255,0.1)';ctx.lineWidth=1;ctx.setLineDash([3*dpr,3*dpr]);
         const y=tYS(lvl,0,100);ctx.beginPath();ctx.moveTo(padL,y);ctx.lineTo(W-padR,y);ctx.stroke();
-        ctx.fillStyle='rgba(90,122,153,0.6)';ctx.font=`${7*dpr}px 'Roboto Mono'`;ctx.textAlign='right';
-        ctx.fillText(lvl,padL-3*dpr,y+3*dpr);
+        ctx.fillStyle='rgba(90,122,153,0.6)';ctx.font=`${7*dpr}px Arial`;ctx.textAlign='right';
+        ctx.textBaseline="middle";ctx.fillText(lvl,padL-3*dpr,y);ctx.textBaseline="alphabetic";
       });
       ctx.setLineDash([]);
       ctx.strokeStyle='#4d9fff';ctx.lineWidth=1.5*dpr;ctx.beginPath();let f=true;
       vals.forEach((v,i)=>{if(!v){f=true;return}const x=toX(i),y=tYS(v.k,0,100);if(f){ctx.moveTo(x,y);f=false}else ctx.lineTo(x,y);});ctx.stroke();
       ctx.strokeStyle='#f0a500';ctx.lineWidth=1*dpr;ctx.beginPath();f=true;
       vals.forEach((v,i)=>{if(!v){f=true;return}const x=toX(i),y=tYS(v.d,0,100);if(f){ctx.moveTo(x,y);f=false}else ctx.lineTo(x,y);});ctx.stroke();
-      ctx.fillStyle='#4d9fff';ctx.font=`bold ${8*dpr}px 'Roboto Mono'`;ctx.textAlign='left';
+      ctx.fillStyle='#4d9fff';ctx.font=`bold ${8*dpr}px Arial`;ctx.textAlign='left';
       ctx.fillText('Stoch',padL+4*dpr,top+11*dpr);
 
     } else if(ind.type==='CCI'){
@@ -2538,14 +2545,65 @@ function drawChart(){
       [100,0,-100].forEach(lvl=>{
         ctx.strokeStyle='rgba(255,255,255,0.1)';ctx.lineWidth=1;ctx.setLineDash([3*dpr,3*dpr]);
         const y=tYS(lvl,vMin,vMax);ctx.beginPath();ctx.moveTo(padL,y);ctx.lineTo(W-padR,y);ctx.stroke();
-        ctx.fillStyle='rgba(90,122,153,0.6)';ctx.font=`${7*dpr}px 'Roboto Mono'`;ctx.textAlign='right';
-        ctx.fillText(lvl,padL-3*dpr,y+3*dpr);
+        ctx.fillStyle='rgba(90,122,153,0.6)';ctx.font=`${7*dpr}px Arial`;ctx.textAlign='right';
+        ctx.textBaseline="middle";ctx.fillText(lvl,padL-3*dpr,y);ctx.textBaseline="alphabetic";
       });
       ctx.setLineDash([]);
       ctx.strokeStyle=color;ctx.lineWidth=1.5*dpr;ctx.beginPath();let f=true;
       vals.forEach((v,i)=>{if(v==null){f=true;return}const x=toX(i),y=tYS(v,vMin,vMax);if(f){ctx.moveTo(x,y);f=false}else ctx.lineTo(x,y);});ctx.stroke();
-      ctx.fillStyle=color;ctx.font=`bold ${8*dpr}px 'Roboto Mono'`;ctx.textAlign='left';
+      ctx.fillStyle=color;ctx.font=`bold ${8*dpr}px Arial`;ctx.textAlign='left';
       ctx.fillText(`CCI(${period})`,padL+4*dpr,top+11*dpr);
+
+    } else if(ind.type==='ATR'){
+      const period=+(ind.params?.period||14);
+      const atrAll=calcATR(data,period);
+      const vals=atrAll.slice(start,end);
+      const allV=vals.filter(v=>v!=null&&isFinite(v));
+      if(!allV.length) return;
+      const vMin=0, vMax=Math.max(...allV);
+      const vPad=vMax*0.1;
+      const mn=vMin, mx=vMax+vPad;
+
+      // Zero baseline
+      const yz=tYS(0,mn,mx);
+      ctx.strokeStyle='rgba(255,255,255,0.1)';ctx.lineWidth=1;ctx.setLineDash([3*dpr,3*dpr]);
+      ctx.beginPath();ctx.moveTo(padL,yz);ctx.lineTo(W-padR,yz);ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Fill area under ATR line
+      ctx.save();
+      ctx.globalAlpha=0.15;
+      ctx.fillStyle='#ff9f40';
+      ctx.beginPath();
+      let firstX=null;
+      vals.forEach((v,i)=>{
+        if(v==null)return;
+        const x=toX(i),y=tYS(v,mn,mx);
+        if(firstX===null){ctx.moveTo(x,yz);ctx.lineTo(x,y);firstX=x;}
+        else ctx.lineTo(x,y);
+      });
+      ctx.lineTo(toX(vals.length-1),yz);
+      ctx.closePath();ctx.fill();
+      ctx.restore();
+
+      // ATR line
+      ctx.strokeStyle='#ff9f40';ctx.lineWidth=1.5*dpr;ctx.setLineDash([]);
+      ctx.beginPath();let f=true;
+      vals.forEach((v,i)=>{
+        if(v==null){f=true;return}
+        const x=toX(i),y=tYS(v,mn,mx);
+        if(f){ctx.moveTo(x,y);f=false}else ctx.lineTo(x,y);
+      });ctx.stroke();
+
+      // Label
+      const lastV=allV[allV.length-1];
+      const decimals=lastV>=10?2:lastV>=1?3:4;
+      ctx.fillStyle='#ff9f40';ctx.font=`bold ${8*dpr}px Arial`;ctx.textAlign='left';
+      ctx.fillText(`ATR(${period}) ${lastV.toFixed(decimals)}`,padL+4*dpr,top+11*dpr);
+
+      // Y-axis labels (max value)
+      ctx.fillStyle='rgba(90,122,153,0.6)';ctx.font=`${7*dpr}px Arial`;ctx.textAlign='right';
+      ctx.textBaseline="middle";ctx.fillText(vMax.toFixed(decimals),padL-3*dpr,tYS(vMax,mn,mx));ctx.textBaseline="alphabetic";
 
     } else if(ind.type==='CUSTOM' && ind.customPlots && ind.customPlots.length){
       // Generic CUSTOM subpanel indicator — auto-scale all plots
@@ -2587,7 +2645,7 @@ function drawChart(){
           const sl=(p.vals||[]).slice(start,end).filter(v=>v!=null&&isFinite(v));
           return sl.length?sl[sl.length-1]:null;
         });
-        ctx.font=`bold ${8*dpr}px 'Roboto Mono'`;ctx.textAlign='left';ctx.setLineDash([]);
+        ctx.font=`bold ${8*dpr}px Arial`;ctx.textAlign='left';ctx.setLineDash([]);
         let labelX=padL+4*dpr;
         ind.customPlots.forEach((plot,pi)=>{
           const v=lastVals[pi];
@@ -2700,7 +2758,7 @@ function drawChart(){
 
       // ── Entry price label ──
       ctx.save();
-      ctx.font = `bold ${8*dpr}px 'Roboto Mono'`;
+      ctx.font = `bold ${8*dpr}px Arial`;
       ctx.textAlign = 'left';
       ctx.fillStyle = isLong ? colGreen : colRed;
       ctx.globalAlpha = 0.9;
@@ -2722,7 +2780,7 @@ function drawChart(){
         const pnlStr = (pnlNum >= 0 ? '+' : '') + '$' + Math.abs(pnlNum).toFixed(0);
         const exitLabel = t.reason + ' ' + pnlStr;
         ctx.save();
-        ctx.font = `bold ${8*dpr}px 'Roboto Mono'`;
+        ctx.font = `bold ${8*dpr}px Arial`;
         ctx.textAlign = 'left';
         ctx.globalAlpha = 0.85;
         const tw = ctx.measureText(exitLabel).width + 8*dpr;
@@ -2738,7 +2796,7 @@ function drawChart(){
 
 
   // X axis labels — real dates based on timeframe
-  ctx.fillStyle='rgba(90,122,153,.8)';ctx.font=`${8*dpr}px 'Roboto Mono'`;ctx.textAlign='center';
+  ctx.fillStyle='rgba(90,122,153,.8)';ctx.font=`${8*dpr}px Arial`;ctx.textAlign='center';
   const step=Math.max(1,Math.floor(slice.length/8));
   slice.forEach((d,i)=>{
     if(i%step!==0) return;
@@ -2754,7 +2812,7 @@ function drawChart(){
         label=dt.toLocaleDateString('en-GB',{month:'short',year:'numeric'});
       }
     } else { label=String(start+i); }
-    ctx.fillText(label,toX(i),H-padB/2+3*dpr);
+    ctx.textBaseline="middle";ctx.fillText(label,toX(i),H-padB/2);ctx.textBaseline="alphabetic";
   });
 
   // Update topbar
@@ -2779,6 +2837,7 @@ function drawChart(){
     el2.textContent=(bc>=0?'+':'')+bcp.toFixed(2)+'%';
     el2.className=bc>=0?'pos':'neg';
   }
+  ctx.restore();
 }
 
 function formatPrice(p,asset){
@@ -3344,10 +3403,17 @@ function updatePyrPreview(){
 function drawPyrCanvas(entries, weights, maxRisk, trigger, step){
   const canvas = document.getElementById('pyr-canvas');
   if(!canvas) return;
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = 320, cssH = 140;
+  canvas.width  = cssW * dpr;
+  canvas.height = cssH * dpr;
+  canvas.style.width  = cssW + 'px';
+  canvas.style.height = cssH + 'px';
   const ctx = canvas.getContext('2d');
-  const W = canvas.width, H = canvas.height;
-  const dpr = 1;
-  ctx.clearRect(0,0,W,H);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+  ctx.clearRect(0, 0, cssW, cssH);
+  const W = cssW, H = cssH;
 
   const padL=32, padR=12, padT=16, padB=28;
   const plotW=W-padL-padR, plotH=H-padT-padB;
@@ -3376,7 +3442,8 @@ function drawPyrCanvas(entries, weights, maxRisk, trigger, step){
     ctx.fill();
 
     // Label
-    ctx.fillStyle='rgba(255,255,255,.7)'; ctx.font=`bold ${9}px monospace`; ctx.textAlign='center';
+    ctx.fillStyle='rgba(255,255,255,.7)'; ctx.font='bold 9px Arial';
+    ctx.textAlign='center'; ctx.textBaseline='middle';
     ctx.fillText(`#${i+1}`, x, entryYs[i]-9);
   });
 
@@ -3385,13 +3452,16 @@ function drawPyrCanvas(entries, weights, maxRisk, trigger, step){
   ctx.strokeStyle='rgba(255,77,109,.5)'; ctx.lineWidth=1; ctx.setLineDash([4,4]);
   ctx.beginPath(); ctx.moveTo(padL, slY); ctx.lineTo(padL+plotW, slY-plotH*0.15); ctx.stroke();
   ctx.setLineDash([]);
-  ctx.fillStyle='rgba(255,77,109,.8)'; ctx.font='8px monospace'; ctx.textAlign='left';
-  ctx.fillText('SL (trails up)', padL+4, slY-4);
+  ctx.fillStyle='rgba(255,77,109,.8)'; ctx.font='8px Arial';
+  ctx.textAlign='left'; ctx.textBaseline='middle';
+  ctx.fillText('SL (trails up)', padL+4, slY-6);
 
   // Axes labels
-  ctx.fillStyle='rgba(255,255,255,.3)'; ctx.font='8px monospace'; ctx.textAlign='center';
-  ctx.fillText('Price ↑', padL-22, padT+plotH/2);
-  ctx.fillText('Time →', padL+plotW/2, H-4);
+  ctx.fillStyle='rgba(255,255,255,.3)'; ctx.font='8px Arial';
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText('Price ↑', padL-18, padT+plotH/2);
+  ctx.fillText('Time →', padL+plotW/2, H-6);
+  ctx.textBaseline='alphabetic';
 }
 
 function updateCombinedSummary(){
@@ -5003,7 +5073,7 @@ function updateIndParam(id,key,val){
 function drawCustomTables(tables, W, H, dpr, padT, padR, padB){
   if(!tables||!tables.length) return;
   const CELL_H=18*dpr, CELL_PAD=6*dpr, COL_W=90*dpr;
-  ctx.font=`${8.5*dpr}px 'Roboto Mono'`;
+  ctx.font=`${8.5*dpr}px Arial`;
   tables.forEach(tbl=>{
     const rows=tbl.rows||[];
     if(!rows.length) return;
@@ -6159,11 +6229,66 @@ function setDateRangeMode(mode){
     dBtn.style.cssText='flex:1;padding:7px 0;font-size:9px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;border-radius:2px;cursor:pointer;transition:all .18s;background:rgba(232,213,163,.12);border:1px solid var(--accent2);color:var(--accent2)';
     bBtn.style.cssText='flex:1;padding:7px 0;font-size:9px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;border-radius:2px;cursor:pointer;transition:all .18s;background:none;border:1px solid var(--border2);color:var(--muted)';
     bPanel.style.display='none'; dPanel.style.display='';
-    // Pre-fill end date to today if empty
-    const ed = document.getElementById('dr-end-date');
-    if(ed && !ed.value){ ed.value = new Date().toISOString().slice(0,10); }
-    updateDateRangeEstimate();
+    // If start date already set, auto-fill end date
+    const sd = document.getElementById('dr-start-date')?.value;
+    if(sd) onStartDateInput();
+    else updateDateRangeEstimate();
   }
+}
+
+// ── Smart bar-count → end-date calculator ──────────────────────────────────
+// Returns bars-per-calendar-day for a given timeframe + asset type
+function _barsPerCalendarDay(tf, isCrypto){
+  // Crypto: 24/7, 1440 min/day
+  // Stocks: ~6.5h/day, ~5 days/week → 390 min/weekday → 390*(5/7) ≈ 278 min/calendar day
+  const minutesPerCalDay = isCrypto ? 1440 : 278;
+  const tfMins = TF_MINUTES[tf] || TF_MINUTES[tf?.toLowerCase()] || 240;
+  return minutesPerCalDay / tfMins;
+}
+
+// Given a start date string (YYYY-MM-DD), bar count, tf, and asset type,
+// return the computed end date string (YYYY-MM-DD).
+function _calcEndDate(startDateStr, bars, tf, isCrypto){
+  const bpd = _barsPerCalendarDay(tf, isCrypto);
+  if(bpd <= 0) return null;
+  const calDays = Math.ceil(bars / bpd);
+  const start = new Date(startDateStr + 'T00:00:00');
+  const end   = new Date(start.getTime() + calDays * 86400000);
+  // Cap at today
+  const today = new Date();
+  const capped = end > today ? today : end;
+  return capped.toISOString().slice(0,10);
+}
+
+// Called whenever start date changes — auto-calculates end date
+function onStartDateInput(){
+  const sd   = document.getElementById('dr-start-date')?.value;
+  const edEl = document.getElementById('dr-end-date');
+  const badge = document.getElementById('dr-end-auto-badge');
+  if(!sd || !edEl) return;
+
+  const bars     = parseInt(document.getElementById('dr-max-bars')?.value) || 5000;
+  const tf       = state.tf || '4h';
+  const isCrypto = !!BINANCE_SYMBOLS[state.asset];
+  const endDate  = _calcEndDate(sd, bars, tf, isCrypto);
+
+  if(endDate){
+    edEl.value = endDate;
+    if(badge) badge.style.display = 'inline-flex';
+    // Re-style end date field to signal it's auto-filled
+    edEl.style.borderColor = 'rgba(232,213,163,.5)';
+    edEl.style.color = 'var(--accent2)';
+  }
+  updateDateRangeEstimate();
+}
+
+// Called when user manually types in the end date — clears the AUTO badge
+function onEndDateManualInput(){
+  const badge = document.getElementById('dr-end-auto-badge');
+  const edEl  = document.getElementById('dr-end-date');
+  if(badge) badge.style.display = 'none';
+  if(edEl){ edEl.style.borderColor = ''; edEl.style.color = ''; }
+  updateDateRangeEstimate();
 }
 
 function setQuickRange(range){
@@ -6180,8 +6305,10 @@ function setQuickRange(range){
   const startStr = start.toISOString().slice(0,10);
   const sd = document.getElementById('dr-start-date');
   const ed = document.getElementById('dr-end-date');
+  const badge = document.getElementById('dr-end-auto-badge');
   if(sd) sd.value = startStr;
-  if(ed) ed.value = endStr;
+  if(ed){ ed.value = endStr; ed.style.borderColor=''; ed.style.color=''; }
+  if(badge) badge.style.display = 'none'; // quick ranges set both ends explicitly
   updateDateRangeEstimate();
 }
 
@@ -6190,20 +6317,45 @@ function updateDateRangeEstimate(){
   if(!el) return;
   const sd = document.getElementById('dr-start-date')?.value;
   const ed = document.getElementById('dr-end-date')?.value;
-  if(!sd || !ed){ el.innerHTML='Select both dates to see estimated bar count.'; return; }
+  const tf = state.tf || '4h';
+  const isCrypto = !!BINANCE_SYMBOLS[state.asset];
+  const maxBars = parseInt(document.getElementById('dr-max-bars')?.value)||5000;
+
+  if(!sd){
+    el.innerHTML = `Pick a <strong style="color:var(--text)">start date</strong> — the end date will be auto-calculated for <strong style="color:var(--accent2)">${maxBars.toLocaleString()} bars</strong> on <strong style="color:var(--accent)">${tf}</strong> (${isCrypto?'crypto 24/7':'stock market hours'}).`;
+    return;
+  }
+  if(!ed){
+    el.innerHTML = 'Start date set — calculating end date…';
+    return;
+  }
+
   const msPerDay = 86400000;
   const days = Math.round((new Date(ed) - new Date(sd)) / msPerDay);
-  if(days<=0){ el.innerHTML='<span style="color:var(--red)">End date must be after start date.</span>'; return; }
-  const tf = state.tf || '4h';
-  const barsPerDay = {'1m':390,'5m':78,'15m':26,'30m':13,'1h':6.5,'2h':3.25,'4h':1.625,'6h':1.08,'12h':0.54,'1d':1,'1D':1,'1w':0.143,'1W':0.143,'1M':0.033}[tf] || 1;
-  const tradingDays = Math.round(days * 5/7); // approx, excludes weekends
-  const estBars = Math.round(tradingDays * barsPerDay);
-  const maxBars = parseInt(document.getElementById('dr-max-bars')?.value)||5000;
+  if(days <= 0){
+    el.innerHTML = '<span style="color:var(--red)">⚠ End date must be after start date.</span>';
+    return;
+  }
+
+  const bpd     = _barsPerCalendarDay(tf, isCrypto);
+  const estBars = Math.round(days * bpd);
   const cappedBars = Math.min(estBars, maxBars);
-  const color = cappedBars >= maxBars ? 'var(--accent2)' : 'var(--green)';
-  el.innerHTML = `Range: <strong style="color:var(--text)">${days} days</strong> · ~${tradingDays} trading days
-    · Estimated <strong style="color:${color}">${cappedBars.toLocaleString()} bars</strong> on ${tf} chart
-    ${cappedBars>=maxBars?`<br><span style="color:var(--accent2)">⚠ Capped at ${maxBars} bars — adjust max or narrow the range.</span>`:''}`;
+  const hitsCap = estBars > maxBars;
+  const color = hitsCap ? 'var(--accent2)' : 'var(--green)';
+
+  // Human-readable date range
+  const fmtDate = str => new Date(str+'T00:00:00').toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'});
+
+  el.innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 12px;margin-bottom:6px">
+      <div>From: <strong style="color:var(--text)">${fmtDate(sd)}</strong></div>
+      <div>To: <strong style="color:var(--text)">${fmtDate(ed)}</strong></div>
+      <div>Duration: <strong style="color:var(--text)">${days} days</strong></div>
+      <div>Timeframe: <strong style="color:var(--accent)">${tf}</strong></div>
+    </div>
+    <div>Estimated bars: <strong style="color:${color}">${cappedBars.toLocaleString()}</strong>${hitsCap?` <span style="color:var(--accent2)">(capped at ${maxBars.toLocaleString()} — ${estBars.toLocaleString()} calculated)</span>`:''}</div>
+    ${hitsCap?`<div style="margin-top:4px;color:var(--accent2)">⚠ To get all bars, increase the cap or narrow the date range.</div>`:''}
+  `;
 }
 
 async function applyTimeframe(){
@@ -7345,14 +7497,19 @@ function drawEquityCurve(){
   const d=state._lastEquity;
   if(!d) return;
   const {equity,capital,capital0,totalReturn}=d;
-  // Use parent width — works whether tab is visible or not via closest modal
   const modal=c.closest('.modal');
-  const W=modal ? modal.clientWidth-48 : 700; // 48px for modal padding
-  const H=200;
-  c.width=W; c.height=H;
-  c.style.height=H+'px';
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = modal ? modal.clientWidth-48 : 700;
+  const cssH = 200;
+  c.width  = cssW * dpr;
+  c.height = cssH * dpr;
+  c.style.width  = cssW + 'px';
+  c.style.height = cssH + 'px';
   const ct=c.getContext('2d');
-  ct.clearRect(0,0,W,H);
+  ct.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ct.imageSmoothingEnabled = false;
+  ct.clearRect(0,0,cssW,cssH);
+  const W=cssW, H=cssH;
   const step=Math.max(1,Math.floor(equity.length/W));
   const eq=equity.filter((_,i)=>i%step===0);
   if(eq.length<2) return;
@@ -7380,15 +7537,17 @@ function drawEquityCurve(){
     ct.setLineDash([]);ct.restore();
   }
   // Y-axis labels
-  ct.fillStyle='rgba(90,122,153,.8)';ct.font='9px monospace';ct.textAlign='left';
+  ct.fillStyle='rgba(90,122,153,.8)';ct.font='9px Arial';
+  ct.textAlign='left';ct.textBaseline='middle';
   const steps=4;
   for(let s=0;s<=steps;s++){
     const v=mn+(rng/steps)*s;
     const y=toY(v);
-    ct.fillText('$'+v.toFixed(0),4,y+3);
+    ct.fillText('$'+v.toFixed(0),4,y);
     ct.save();ct.strokeStyle='rgba(26,37,53,.4)';ct.lineWidth=1;
     ct.beginPath();ct.moveTo(pad,y);ct.lineTo(W-pad,y);ct.stroke();ct.restore();
   }
+  ct.textBaseline='alphabetic';
 }
 
 function buildResultsModal(){
@@ -7557,14 +7716,16 @@ function drawLabelBar(ctx, x0, x1, y, anchor, text, bg, fg, dpr){
   ctx.fillStyle=bg;
   ctx.fillRect(x0, ty, x1-x0, h);
   ctx.fillStyle=fg;
-  ctx.font=`bold ${9*dpr}px 'Roboto Mono'`;
+  ctx.font=`bold ${9*dpr}px Arial`;
   ctx.textAlign='center';
-  ctx.fillText(text, x0+(x1-x0)/2, ty+h*0.65);
+  ctx.textBaseline='middle';
+  ctx.fillText(text, x0+(x1-x0)/2, ty+h*0.5);
+  ctx.textBaseline='alphabetic';
 }
 
 function drawInfoBox(ctx, cx, cy, text, dpr){
   const pad=10*dpr, h=30*dpr;
-  ctx.font=`${9*dpr}px 'Roboto Mono'`;
+  ctx.font=`${9*dpr}px Arial`;
   const tw=ctx.measureText(text).width+pad*2;
   const bx=cx-tw/2, by=cy-h/2;
   ctx.fillStyle='rgba(13,17,23,0.93)';
@@ -7576,7 +7737,9 @@ function drawInfoBox(ctx, cx, cy, text, dpr){
   ctx.fill();ctx.stroke();
   ctx.fillStyle='rgba(205,217,229,0.95)';
   ctx.textAlign='center';
-  ctx.fillText(text, cx, by+h*0.65);
+  ctx.textBaseline='middle';
+  ctx.fillText(text, cx, by+h*0.5);
+  ctx.textBaseline='alphabetic';
 }
 
 // Hit-test mouse against all tools
@@ -7714,15 +7877,16 @@ function drawCrosshair(mx, my){
 
   // Helper: draw a pill label on the LEFT axis at given Y
   function leftLabel(y, text, bg, fg='#fff'){
-    ctx.font=`bold ${9*dpr}px 'Roboto Mono'`;
+    ctx.font=`bold ${9*dpr}px Arial`;
     const tw=ctx.measureText(text).width+10*dpr;
     const x=padL-tw-1;
     const clampedY=Math.max(padT+9*dpr, Math.min(H-padB-9*dpr, y));
     ctx.fillStyle=bg;
     if(ctx.roundRect){ctx.beginPath();ctx.roundRect(x,clampedY-9*dpr,tw,18*dpr,3*dpr);ctx.fill();}
     else ctx.fillRect(x,clampedY-9*dpr,tw,18*dpr);
-    ctx.fillStyle=fg;ctx.textAlign='left';
-    ctx.fillText(text,x+5*dpr,clampedY+4*dpr);
+    ctx.fillStyle=fg;ctx.textAlign='left';ctx.textBaseline='middle';
+    ctx.fillText(text,x+5*dpr,clampedY);
+    ctx.textBaseline='alphabetic';
   }
 
   // ── Main panel: price label on LEFT axis (at cursor Y) ──
@@ -7798,7 +7962,22 @@ function drawCrosshair(mx, my){
       leftLabel(yV, v.toFixed(1), '#00e676', '#000');
       if(my>=top&&my<=bot){
         const cv=(1-(my-top)/subPanelH)*(vMax-vMin)+vMin;
-        leftLabel(my, cv.toFixed(1), 'rgba(30,40,55,0.9)', 'rgba(180,200,220,0.9)');
+        leftLabel(my, cv.toFixed(2), 'rgba(30,40,55,0.9)', 'rgba(180,200,220,0.9)');
+      }
+
+    } else if(ind.type==='ATR'){
+      const period=+(ind.params?.period||14);
+      const atrAll=calcATR(closes.map((_,i)=>({h:highs2[i],l:lows2[i],c:closes[i]})),period);
+      const v=atrAll[globalIdx];
+      if(v==null) return;
+      const allV=atrAll.filter(x=>x!=null&&isFinite(x));
+      const vMax=Math.max(...allV), mn=0, mx=vMax*1.1||1;
+      const yV=top+(1-v/mx)*subPanelH;
+      const decimals=v>=10?2:v>=1?3:4;
+      leftLabel(yV, v.toFixed(decimals), '#ff9f40', '#000');
+      if(my>=top&&my<=bot){
+        const cv=(1-(my-top)/subPanelH)*mx;
+        leftLabel(my, cv.toFixed(decimals), 'rgba(30,40,55,0.9)', 'rgba(180,200,220,0.9)');
       }
 
     } else if(ind.type==='CUSTOM' && ind.customPlots){
@@ -7835,15 +8014,16 @@ function drawCrosshair(mx, my){
     } else {
       lbl=dt.toLocaleDateString('en-GB',{month:'long',year:'numeric'});
     }
-    ctx.font=`bold ${9*dpr}px 'Roboto Mono'`;
+    ctx.font=`bold ${9*dpr}px Arial`;
     const tw=ctx.measureText(lbl).width+14*dpr;
     const lx=Math.max(padL+2*dpr, Math.min(W-padR-tw-2*dpr, mx-tw/2));
     const ly=H-padB+2*dpr;
     ctx.fillStyle='rgba(0,212,255,0.95)';
     if(ctx.roundRect){ctx.beginPath();ctx.roundRect(lx,ly,tw,18*dpr,3*dpr);ctx.fill();}
     else ctx.fillRect(lx,ly,tw,18*dpr);
-    ctx.fillStyle='#000';ctx.textAlign='left';
-    ctx.fillText(lbl,lx+7*dpr,ly+13*dpr);
+    ctx.fillStyle='#000';ctx.textAlign='left';ctx.textBaseline='middle';
+    ctx.fillText(lbl,lx+7*dpr,ly+9*dpr);
+    ctx.textBaseline='alphabetic';
   }
 
   // ── OHLC tooltip box near cursor ──
@@ -7855,7 +8035,7 @@ function drawCrosshair(mx, my){
       ['L',formatPrice(bar.l,state.asset),'#ff4d6d'],
       ['C',formatPrice(bar.c,state.asset),isUp?'#00e676':'#ff4d6d'],
     ];
-    ctx.font=`${9*dpr}px 'Roboto Mono'`;
+    ctx.font=`${9*dpr}px Arial`;
     const maxW=Math.max(...lines.map(([k,v])=>ctx.measureText(`${k} ${v}`).width));
     const bw=maxW+16*dpr, bh=lines.length*15*dpr+10*dpr;
     let bx=mx+10*dpr; if(bx+bw>W-padR-5*dpr) bx=mx-bw-10*dpr;
@@ -7864,12 +8044,15 @@ function drawCrosshair(mx, my){
     ctx.strokeStyle='rgba(255,255,255,0.1)';ctx.lineWidth=1;
     if(ctx.roundRect){ctx.beginPath();ctx.roundRect(bx,by,bw,bh,4*dpr);ctx.fill();ctx.stroke();}
     else{ctx.fillRect(bx,by,bw,bh);ctx.strokeRect(bx,by,bw,bh);}
+    ctx.textBaseline='middle';
     lines.forEach(([k,v,col],i)=>{
+      const rowMidY = by+10*dpr+(i+0.5)*15*dpr;
       ctx.fillStyle='rgba(120,140,160,0.8)';ctx.textAlign='left';
-      ctx.fillText(k,bx+7*dpr,by+14*dpr+i*15*dpr);
+      ctx.fillText(k,bx+7*dpr,rowMidY);
       ctx.fillStyle=col;
-      ctx.fillText(v,bx+20*dpr,by+14*dpr+i*15*dpr);
+      ctx.fillText(v,bx+20*dpr,rowMidY);
     });
+    ctx.textBaseline='alphabetic';
   }
 
   ctx.restore();
@@ -8234,8 +8417,7 @@ function replaySetStart(){
   const visible = Math.floor(data.length / chartZoom);
   const start   = Math.max(0, Math.min(data.length - visible, Math.floor(chartOffset)));
 
-  // Need at least 2 bars before the start point for indicators to warm up,
-  // but the replay current bar begins at `start` (first bar shown)
+  // Need at least 2 bars before the start point for indicators to warm up
   const startBar = Math.max(1, start);
 
   // Activate replay
@@ -8257,12 +8439,12 @@ function replaySetStart(){
   if(playBtn){ playBtn.textContent = '▶'; playBtn.classList.remove('playing'); }
 
   // Zoom to show a comfortable window ending at startBar
-  const windowSize = Math.min(80, Math.floor(data.length * 0.15));
-  chartZoom = Math.max(1, data.length / windowSize);
-  chartOffset = Math.max(0, startBar - Math.floor(windowSize * 0.7));
+  // Since drawChart slices to currentBar, we set zoom/offset relative to startBar+1 bars
+  const windowSize = Math.min(80, Math.max(20, Math.floor(startBar * 0.15)));
+  chartZoom = Math.max(1, (startBar + 1) / windowSize);
+  chartOffset = Math.max(0, startBar - Math.floor(windowSize * 0.85));
 
   replayUpdateUI();
-  replayApplyVeil();
   drawChart();
 }
 
@@ -8274,8 +8456,10 @@ function replayStep(delta){
   r.currentBar = newBar;
 
   // Auto-scroll: keep the current bar visible near the right side
-  const visible = Math.floor(state.priceData.length / chartZoom);
-  const margin  = Math.max(3, Math.floor(visible * 0.15));
+  // Since data is sliced to currentBar, data.length = currentBar+1
+  const visibleLen = r.currentBar + 1; // sliced data length
+  const visible    = Math.floor(visibleLen / chartZoom);
+  const margin     = Math.max(3, Math.floor(visible * 0.15));
   if(r.currentBar >= chartOffset + visible - margin){
     chartOffset = Math.max(0, r.currentBar - visible + margin + 1);
   }
@@ -8284,7 +8468,6 @@ function replayStep(delta){
   }
 
   replayUpdateUI();
-  replayApplyVeil();
   drawChart();
 }
 
@@ -8330,10 +8513,11 @@ function replayExit(){
 
   document.getElementById('replay-bar').classList.remove('active');
   document.getElementById('replay-mode-badge').style.display = 'none';
-  document.getElementById('replay-veil').style.display = 'none';
   const setBtn = document.getElementById('btn-replay-set');
   if(setBtn) setBtn.classList.remove('armed');
 
+  // Reset chart zoom/offset to show full data
+  chartOffset = 0; chartZoom = 1;
   drawChart();
 }
 
@@ -8371,53 +8555,6 @@ function replayUpdateUI(){
   if(handle) handle.style.left = pct + '%';
 }
 
-function replayApplyVeil(){
-  // The veil covers the portion of the canvas to the RIGHT of the current replay bar
-  const r = state.replay;
-  if(!r.active){ document.getElementById('replay-veil').style.display='none'; return; }
-
-  const data = state.priceData;
-  const veil = document.getElementById('replay-veil');
-  if(!veil) return;
-
-  const W       = canvas.clientWidth;
-  const dpr     = devicePixelRatio;
-  const padL    = 60;   // CSS pixels (not dpr-scaled for veil positioning)
-  const padR    = 20;
-  const plotW   = W - padL - padR;
-  const visible = Math.floor(data.length / chartZoom);
-  const start   = Math.max(0, Math.min(data.length - visible, Math.floor(chartOffset)));
-
-  // How many bars into the visible slice is the current replay bar?
-  const barsIntoSlice = r.currentBar - start;
-  const sliceCount    = Math.min(visible, data.length - start);
-
-  if(barsIntoSlice >= sliceCount - 1){
-    // Current bar is at or past right edge — no veil needed
-    veil.style.display = 'none';
-    return;
-  }
-  if(barsIntoSlice < 0){
-    // Entire chart is future — veil covers everything
-    veil.style.display = 'block';
-    veil.style.left    = padL + 'px';
-    veil.style.right   = padR + 'px';
-    veil.style.top     = '0';
-    veil.style.bottom  = '0';
-    return;
-  }
-
-  // X pixel of the RIGHT edge of the current bar's candle
-  const barWidth = plotW / sliceCount;
-  const xRight   = padL + (barsIntoSlice + 1) * barWidth;
-
-  veil.style.display = 'block';
-  veil.style.left    = Math.floor(xRight) + 'px';
-  veil.style.right   = padR + 'px';
-  veil.style.top     = '0';
-  veil.style.bottom  = '0';
-}
-
 // Progress bar drag
 function replayProgressMousedown(e){
   if(!state.replay?.active) return;
@@ -8433,8 +8570,9 @@ function replayProgressSeek(e){
   const r    = state.replay;
   const newBar = Math.round(r.startBar + pct * (r.totalBars - 1 - r.startBar));
   r.currentBar = Math.max(r.startBar, Math.min(r.totalBars - 1, newBar));
+  // Keep current bar in view
+  chartOffset = Math.max(0, r.currentBar - Math.floor((r.currentBar + 1) / chartZoom) + 4);
   replayUpdateUI();
-  replayApplyVeil();
   drawChart();
 }
 
@@ -8458,41 +8596,47 @@ document.addEventListener('keydown', e=>{
   if(e.code === 'ArrowLeft'  && e.shiftKey){ e.preventDefault(); replayStep(-10); }
 });
 
-// Override drawChart to respect replay mode (hide future price data)
-const _origDrawChart = drawChart;
-// We'll patch drawChart inline by modifying what slice of priceData is used —
-// handled via replayApplyVeil() which overlays a CSS veil; drawChart itself
-// does NOT need to be patched since priceData always contains all bars and
-// the veil visually hides the future. However we DO re-apply the veil after
-// every drawChart call so the position stays in sync.
-const _drawChartBase = drawChart;
-drawChart = function(){
-  _drawChartBase();
-  if(state.replay?.active) replayApplyVeil();
-};
+// drawChart already slices state.priceData based on state.replay.currentBar,
+// so no override wrapper is needed here.
 
 // ── Date Range Modal initialiser (called when opening timeframe modal) ──
 function initDateRangeModal(){
   // Restore saved mode
   const mode = state.dateRange?.mode || 'bars';
   _drMode = mode;
-  // Set current date values
-  const today = new Date().toISOString().slice(0,10);
-  const edEl = document.getElementById('dr-end-date');
-  const sdEl = document.getElementById('dr-start-date');
-  if(edEl && !edEl.value) edEl.value = state.dateRange?.endDate || today;
-  if(sdEl && !sdEl.value) sdEl.value = state.dateRange?.startDate || '';
+
+  // Restore saved values
+  const sdEl  = document.getElementById('dr-start-date');
+  const edEl  = document.getElementById('dr-end-date');
   const maxEl = document.getElementById('dr-max-bars');
-  if(maxEl) maxEl.value = state.dateRange?.maxBars || 5000;
-  const barsEl = document.getElementById('bars-input');
+  const barsEl= document.getElementById('bars-input');
+  const badge = document.getElementById('dr-end-auto-badge');
+
   if(barsEl) barsEl.value = state.bars || 2000;
+  if(maxEl)  maxEl.value  = state.dateRange?.maxBars || 5000;
+
+  if(sdEl) sdEl.value = state.dateRange?.startDate || '';
+  if(edEl){
+    edEl.value = state.dateRange?.endDate || '';
+    // If end date was previously auto-filled, restore the gold styling
+    if(state.dateRange?.endDate && state.dateRange?.startDate){
+      edEl.style.borderColor = 'rgba(232,213,163,.5)';
+      edEl.style.color = 'var(--accent2)';
+      if(badge) badge.style.display = 'inline-flex';
+    } else {
+      edEl.style.borderColor = '';
+      edEl.style.color = '';
+      if(badge) badge.style.display = 'none';
+    }
+  }
+
   // Apply mode UI (deferred so DOM is ready)
-  setTimeout(()=> setDateRangeMode(mode), 10);
-  // Wire up date inputs for live estimate
-  if(sdEl) sdEl.addEventListener('change', updateDateRangeEstimate);
-  if(edEl) edEl.addEventListener('change', updateDateRangeEstimate);
-  const maxEl2 = document.getElementById('dr-max-bars');
-  if(maxEl2) maxEl2.addEventListener('change', updateDateRangeEstimate);
+  setTimeout(()=>{
+    setDateRangeMode(mode);
+    // If start date is already set, trigger auto-fill calculation
+    if(mode === 'date' && sdEl?.value) onStartDateInput();
+    else updateDateRangeEstimate();
+  }, 10);
 }
 window.addEventListener('resize',resizeCanvas);
 buildSidebar();
