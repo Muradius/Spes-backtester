@@ -381,6 +381,68 @@ input:checked+.tslider::before{transform:translateX(16px);background:var(--accen
 body::-webkit-scrollbar{width:6px}
 body::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px}
 
+/* ── REPLAY BAR ── */
+#replay-bar{
+  position:absolute;bottom:0;left:0;right:0;z-index:20;
+  background:rgba(8,14,22,0.97);border-top:1px solid rgba(0,212,255,.35);
+  display:none;align-items:center;gap:10px;padding:0 14px;height:44px;
+  box-shadow:0 -4px 24px rgba(0,212,255,.08);
+}
+#replay-bar.active{display:flex}
+.replay-btn{
+  width:30px;height:30px;display:flex;align-items:center;justify-content:center;
+  border:1px solid var(--border2);background:none;color:var(--muted);
+  cursor:pointer;border-radius:3px;font-size:13px;transition:all .15s;flex-shrink:0
+}
+.replay-btn:hover{border-color:var(--accent);color:var(--accent);background:rgba(0,212,255,.08)}
+.replay-btn.active{border-color:var(--accent);color:var(--accent);background:rgba(0,212,255,.12)}
+.replay-btn.play-btn{width:36px;height:36px;font-size:15px;border-color:var(--accent);color:var(--accent)}
+.replay-btn.play-btn.playing{border-color:var(--accent2);color:var(--accent2);background:rgba(232,213,163,.1)}
+#replay-progress{
+  flex:1;height:4px;background:var(--border);border-radius:2px;cursor:pointer;position:relative;
+  min-width:80px;
+}
+#replay-progress-fill{
+  height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));
+  border-radius:2px;pointer-events:none;transition:width .1s linear;
+}
+#replay-progress-handle{
+  position:absolute;top:50%;width:12px;height:12px;background:var(--accent);
+  border-radius:50%;transform:translate(-50%,-50%);cursor:grab;
+  border:2px solid rgba(0,0,0,.5);box-shadow:0 0 6px rgba(0,212,255,.5);
+  transition:left .1s linear;
+}
+#replay-counter{font-family:var(--font-mono);font-size:10px;color:var(--accent);white-space:nowrap;min-width:80px}
+#replay-date{font-family:var(--font-mono);font-size:9px;color:var(--muted);white-space:nowrap;min-width:110px}
+.replay-speed{
+  display:flex;align-items:center;gap:4px;
+}
+.replay-speed label{font-size:8px;color:var(--muted);letter-spacing:1px;text-transform:uppercase}
+.replay-speed select{
+  background:rgba(0,0,0,.5);border:1px solid var(--border2);color:var(--accent2);
+  font-family:var(--font-mono);font-size:9px;padding:2px 4px;border-radius:2px;outline:none
+}
+#replay-mode-badge{
+  display:none;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  background:rgba(0,212,255,.12);border:1px solid rgba(0,212,255,.3);border-radius:3px;
+  font-size:9px;font-weight:700;letter-spacing:2px;color:var(--accent);padding:2px 10px;
+  pointer-events:none;text-transform:uppercase;
+}
+/* Veil overlay — hides future bars during replay */
+#replay-veil{
+  position:absolute;top:0;bottom:0;right:0;pointer-events:none;z-index:5;
+  background:rgba(8,14,22,0.85);display:none;
+  border-left:1px solid rgba(0,212,255,.2);
+}
+/* Chart toolbar replay set-start button */
+#btn-replay-set{
+  background:none;border:1px solid var(--border2);color:var(--muted);
+  padding:3px 10px;font-family:var(--font-mono);font-size:9px;letter-spacing:1px;
+  cursor:pointer;border-radius:2px;transition:all .2s;text-transform:uppercase;flex-shrink:0
+}
+#btn-replay-set:hover{border-color:var(--accent);color:var(--accent)}
+#btn-replay-set.armed{border-color:var(--accent);color:var(--accent);background:rgba(0,212,255,.1)}
+
 /* ── FIREBASE AUTH UI ── */
 #auth-overlay{
   position:fixed;inset:0;z-index:99999;
@@ -541,9 +603,37 @@ body::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px}
       <button class="tf-btn" onclick="setTF(this,'1w')">1W</button>
       <div class="chart-sep"></div>
       <span id="tf-label" style="font-size:9px;font-family:var(--font-mono);color:var(--muted)">500 bars</span>
+      <div class="chart-sep"></div>
+      <button id="btn-replay-set" onclick="replaySetStart()" title="Set replay start at current view position">▷ Set Replay Start</button>
     </div>
-    <div class="chart-canvas-wrap">
+    <div class="chart-canvas-wrap" style="position:relative">
       <canvas id="mainCanvas"></canvas>
+      <div id="replay-veil"></div>
+      <div id="replay-mode-badge">REPLAY</div>
+    </div>
+    <!-- REPLAY CONTROL BAR -->
+    <div id="replay-bar">
+      <button class="replay-btn" onclick="replayStep(-10)" title="Back 10 bars">«</button>
+      <button class="replay-btn" onclick="replayStep(-1)" title="Previous bar">‹</button>
+      <button class="replay-btn play-btn" id="replay-play-btn" onclick="replayTogglePlay()" title="Play/Pause (Space)">▶</button>
+      <button class="replay-btn" onclick="replayStep(1)" title="Next bar">›</button>
+      <button class="replay-btn" onclick="replayStep(10)" title="Forward 10 bars">»</button>
+      <div id="replay-progress" onmousedown="replayProgressMousedown(event)">
+        <div id="replay-progress-fill" style="width:0%"></div>
+        <div id="replay-progress-handle" style="left:0%"></div>
+      </div>
+      <span id="replay-counter">Bar 0 / 0</span>
+      <span id="replay-date">—</span>
+      <div class="replay-speed">
+        <label>Speed</label>
+        <select id="replay-speed-sel" onchange="replayUpdateSpeed()">
+          <option value="800">Slow</option>
+          <option value="400" selected>Normal</option>
+          <option value="150">Fast</option>
+          <option value="50">Ultra</option>
+        </select>
+      </div>
+      <button class="replay-btn" onclick="replayExit()" title="Exit replay" style="margin-left:4px;border-color:rgba(255,77,109,.4);color:var(--red)">✕ Exit</button>
     </div>
   </div>
 
@@ -763,10 +853,10 @@ return calculate(closes, highs, lows, data);</textarea>
 
 <!-- TIMEFRAME MODAL -->
 <div class="modal-overlay" id="modal-timeframe">
-  <div class="modal" style="width:420px">
+  <div class="modal" style="width:480px">
     <div class="modal-header">
       <span class="modal-icon">◷</span>
-      <h2>Timeframe Settings</h2>
+      <h2>Timeframe & Date Range</h2>
       <button class="modal-close" onclick="closeModal('timeframe')">✕</button>
     </div>
     <div class="modal-body">
@@ -776,19 +866,78 @@ return calculate(closes, highs, lows, data);</textarea>
           <button class="tf-btn" style="border:1px solid var(--border2);padding:10px" onclick="setTFFromModal('${tf}',this)">${tf}</button>
         `).join('')}
       </div>
-      <div class="section-title">Data Bars</div>
-      <div class="row2">
-        <div class="field">
-          <label>Number of Bars</label>
-          <input type="number" id="bars-input" value="2000" min="100" max="5000" step="100"/>
+      <div class="section-title">Data Source</div>
+      <!-- Mode toggle: Bar count vs Date Range -->
+      <div style="display:flex;gap:6px;margin-bottom:14px">
+        <button id="dr-mode-bars" onclick="setDateRangeMode('bars')"
+          style="flex:1;padding:7px 0;font-size:9px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;border-radius:2px;cursor:pointer;transition:all .18s;background:rgba(0,212,255,.15);border:1px solid var(--accent);color:var(--accent)">
+          ◈ BAR COUNT
+        </button>
+        <button id="dr-mode-date" onclick="setDateRangeMode('date')"
+          style="flex:1;padding:7px 0;font-size:9px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;border-radius:2px;cursor:pointer;transition:all .18s;background:none;border:1px solid var(--border2);color:var(--muted)">
+          ◷ DATE RANGE
+        </button>
+      </div>
+
+      <!-- BAR COUNT mode -->
+      <div id="dr-bars-panel">
+        <div class="row2">
+          <div class="field">
+            <label>Number of Bars</label>
+            <input type="number" id="bars-input" value="2000" min="100" max="5000" step="100"/>
+          </div>
+          <div class="field">
+            <label>Chart Type</label>
+            <select id="chart-type">
+              <option value="candle">Candlestick</option>
+              <option value="line">Line</option>
+              <option value="bar">OHLC Bar</option>
+            </select>
+          </div>
         </div>
-        <div class="field">
-          <label>Chart Type</label>
-          <select id="chart-type">
-            <option value="candle">Candlestick</option>
-            <option value="line">Line</option>
-            <option value="bar">OHLC Bar</option>
-          </select>
+        <div style="font-size:9px;color:var(--muted);line-height:1.7;padding:8px 10px;background:rgba(0,0,0,.3);border-radius:3px;border:1px solid var(--border)">
+          Loads the most recent <strong style="color:var(--text)">N bars</strong> ending at today. Max 5,000 per fetch.
+        </div>
+      </div>
+
+      <!-- DATE RANGE mode -->
+      <div id="dr-date-panel" style="display:none">
+        <div class="row2" style="margin-bottom:10px">
+          <div class="field">
+            <label>Start Date</label>
+            <input type="date" id="dr-start-date" style="font-family:var(--font-mono);font-size:11px"/>
+          </div>
+          <div class="field">
+            <label>End Date</label>
+            <input type="date" id="dr-end-date" style="font-family:var(--font-mono);font-size:11px"/>
+          </div>
+        </div>
+        <div class="row2" style="margin-bottom:10px">
+          <div class="field">
+            <label>Chart Type</label>
+            <select id="chart-type-dr">
+              <option value="candle">Candlestick</option>
+              <option value="line">Line</option>
+              <option value="bar">OHLC Bar</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Max Bars (API cap)</label>
+            <input type="number" id="dr-max-bars" value="5000" min="100" max="5000" step="100"/>
+          </div>
+        </div>
+        <!-- Quick range presets -->
+        <div style="margin-bottom:10px">
+          <div style="font-size:9px;color:var(--muted);letter-spacing:1px;text-transform:uppercase;margin-bottom:6px">Quick Ranges</div>
+          <div style="display:flex;gap:5px;flex-wrap:wrap">
+            ${['1M','3M','6M','1Y','2Y','5Y','YTD'].map(r=>`<button onclick="setQuickRange('${r}')"
+              style="padding:3px 10px;font-size:9px;font-family:var(--font-mono);background:none;border:1px solid var(--border2);color:var(--muted);cursor:pointer;border-radius:2px;transition:all .15s"
+              onmouseover="this.style.borderColor='var(--accent)';this.style.color='var(--accent)'"
+              onmouseout="this.style.borderColor='var(--border2)';this.style.color='var(--muted)'">${r}</button>`).join('')}
+          </div>
+        </div>
+        <div id="dr-estimate" style="font-size:9px;color:var(--muted);padding:8px 10px;background:rgba(0,0,0,.3);border-radius:3px;border:1px solid var(--border);line-height:1.7">
+          Select a date range to see estimated bar count.
         </div>
       </div>
     </div>
@@ -1591,6 +1740,20 @@ let state = {
       mode: 'realistic',  // 'realistic' (long pays, short receives) | 'stress' (both pay)
     }
   },
+  // ── Replay state ──
+  replay: {
+    active: false,
+    startBar: 0,      // index into priceData where replay began
+    currentBar: 0,    // index of last visible bar (inclusive)
+    totalBars: 0,     // = priceData.length
+  },
+  // ── Date range state ──
+  dateRange: {
+    mode: 'bars',     // 'bars' | 'date'
+    startDate: null,
+    endDate: null,
+    maxBars: 5000,
+  },
 };
 
 // ═══════════════════════════════════════════════════════
@@ -1699,11 +1862,27 @@ async function fetchBinance(symbol, tf, bars){
 }
 
 // Twelve Data fetch
-async function fetchTwelveData(assetId, tf, bars){
+async function fetchTwelveData(assetId, tf, bars, startDate, endDate){
   const symbol   = tdSymbol(assetId);
   const interval = TD_TF[tf] || '1day';
-  const outputsize = Math.min(bars, 5000);
-  const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(symbol)}&interval=${interval}&outputsize=${outputsize}&apikey=${TD_KEY}&format=JSON&order=ASC`;
+  const outputsize = Math.min(bars||5000, 5000);
+  let url;
+  if(startDate || endDate){
+    // Date range mode — pass start_date and/or end_date to Twelve Data
+    const params = new URLSearchParams({
+      symbol: symbol,
+      interval,
+      outputsize,
+      apikey: TD_KEY,
+      format: 'JSON',
+      order: 'ASC',
+    });
+    if(startDate) params.set('start_date', startDate); // e.g. '2022-01-01'
+    if(endDate)   params.set('end_date',   endDate);   // e.g. '2023-12-31'
+    url = `https://api.twelvedata.com/time_series?${params.toString()}`;
+  } else {
+    url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(symbol)}&interval=${interval}&outputsize=${outputsize}&apikey=${TD_KEY}&format=JSON&order=ASC`;
+  }
   const res = await fetchWithTimeout(url, 15000);
   if(!res.ok) throw new Error('Twelve Data HTTP '+res.status);
   const json = await res.json();
@@ -1729,8 +1908,8 @@ function tdSymbol(assetId){
 }
 
 // Master fetch — everything through Twelve Data (5000 bars for all assets)
-async function fetchLiveData(assetId, tf, bars){
-  return await fetchTwelveData(assetId, tf, bars);
+async function fetchLiveData(assetId, tf, bars, startDate, endDate){
+  return await fetchTwelveData(assetId, tf, bars, startDate, endDate);
 }
 
 // ── Real-time ticker ──────────────────────────────────────
@@ -1932,6 +2111,7 @@ function resizeCanvas(){
   canvas.style.width=wrap.clientWidth+'px';
   canvas.style.height=wrap.clientHeight+'px';
   drawChart();
+  if(state.replay?.active) replayApplyVeil();
 }
 
 function drawChart(){
@@ -2658,6 +2838,7 @@ function openModal(name){
   if(name==='risk') renderRiskProfilesList();
   if(name==='backtest') buildBacktestModal();
   if(name==='btsettings') openBtSettings();
+  if(name==='timeframe') setTimeout(initDateRangeModal, 20);
   document.getElementById('modal-'+name).classList.add('open');
 }
 function closeModal(name){document.getElementById('modal-'+name).classList.remove('open')}
@@ -5959,10 +6140,90 @@ function setTFFromModal(tf,btn){
   if(btn)btn.style.background='rgba(0,212,255,.15)';
   state.tf=tf;
 }
+
+// ── Date Range Modal ─────────────────────────────────────
+let _drMode = 'bars'; // 'bars' | 'date'
+
+function setDateRangeMode(mode){
+  _drMode = mode;
+  const bBtn = document.getElementById('dr-mode-bars');
+  const dBtn = document.getElementById('dr-mode-date');
+  const bPanel = document.getElementById('dr-bars-panel');
+  const dPanel = document.getElementById('dr-date-panel');
+  if(!bBtn) return;
+  if(mode==='bars'){
+    bBtn.style.cssText='flex:1;padding:7px 0;font-size:9px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;border-radius:2px;cursor:pointer;transition:all .18s;background:rgba(0,212,255,.15);border:1px solid var(--accent);color:var(--accent)';
+    dBtn.style.cssText='flex:1;padding:7px 0;font-size:9px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;border-radius:2px;cursor:pointer;transition:all .18s;background:none;border:1px solid var(--border2);color:var(--muted)';
+    bPanel.style.display=''; dPanel.style.display='none';
+  } else {
+    dBtn.style.cssText='flex:1;padding:7px 0;font-size:9px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;border-radius:2px;cursor:pointer;transition:all .18s;background:rgba(232,213,163,.12);border:1px solid var(--accent2);color:var(--accent2)';
+    bBtn.style.cssText='flex:1;padding:7px 0;font-size:9px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;border-radius:2px;cursor:pointer;transition:all .18s;background:none;border:1px solid var(--border2);color:var(--muted)';
+    bPanel.style.display='none'; dPanel.style.display='';
+    // Pre-fill end date to today if empty
+    const ed = document.getElementById('dr-end-date');
+    if(ed && !ed.value){ ed.value = new Date().toISOString().slice(0,10); }
+    updateDateRangeEstimate();
+  }
+}
+
+function setQuickRange(range){
+  const today = new Date();
+  const endStr = today.toISOString().slice(0,10);
+  let start = new Date(today);
+  if(range==='1M')  start.setMonth(start.getMonth()-1);
+  else if(range==='3M')  start.setMonth(start.getMonth()-3);
+  else if(range==='6M')  start.setMonth(start.getMonth()-6);
+  else if(range==='1Y')  start.setFullYear(start.getFullYear()-1);
+  else if(range==='2Y')  start.setFullYear(start.getFullYear()-2);
+  else if(range==='5Y')  start.setFullYear(start.getFullYear()-5);
+  else if(range==='YTD') start = new Date(today.getFullYear(),0,1);
+  const startStr = start.toISOString().slice(0,10);
+  const sd = document.getElementById('dr-start-date');
+  const ed = document.getElementById('dr-end-date');
+  if(sd) sd.value = startStr;
+  if(ed) ed.value = endStr;
+  updateDateRangeEstimate();
+}
+
+function updateDateRangeEstimate(){
+  const el = document.getElementById('dr-estimate');
+  if(!el) return;
+  const sd = document.getElementById('dr-start-date')?.value;
+  const ed = document.getElementById('dr-end-date')?.value;
+  if(!sd || !ed){ el.innerHTML='Select both dates to see estimated bar count.'; return; }
+  const msPerDay = 86400000;
+  const days = Math.round((new Date(ed) - new Date(sd)) / msPerDay);
+  if(days<=0){ el.innerHTML='<span style="color:var(--red)">End date must be after start date.</span>'; return; }
+  const tf = state.tf || '4h';
+  const barsPerDay = {'1m':390,'5m':78,'15m':26,'30m':13,'1h':6.5,'2h':3.25,'4h':1.625,'6h':1.08,'12h':0.54,'1d':1,'1D':1,'1w':0.143,'1W':0.143,'1M':0.033}[tf] || 1;
+  const tradingDays = Math.round(days * 5/7); // approx, excludes weekends
+  const estBars = Math.round(tradingDays * barsPerDay);
+  const maxBars = parseInt(document.getElementById('dr-max-bars')?.value)||5000;
+  const cappedBars = Math.min(estBars, maxBars);
+  const color = cappedBars >= maxBars ? 'var(--accent2)' : 'var(--green)';
+  el.innerHTML = `Range: <strong style="color:var(--text)">${days} days</strong> · ~${tradingDays} trading days
+    · Estimated <strong style="color:${color}">${cappedBars.toLocaleString()} bars</strong> on ${tf} chart
+    ${cappedBars>=maxBars?`<br><span style="color:var(--accent2)">⚠ Capped at ${maxBars} bars — adjust max or narrow the range.</span>`:''}`;
+}
+
 async function applyTimeframe(){
-  state.bars=parseInt(document.getElementById('bars-input').value)||500;
-  chartOffset=0;chartZoom=1;
-  document.getElementById('tf-label').textContent='2000 bars';
+  if(_drMode === 'date'){
+    const sd = document.getElementById('dr-start-date')?.value;
+    const ed = document.getElementById('dr-end-date')?.value;
+    if(!sd||!ed){ alert('Please select both start and end dates.'); return; }
+    if(new Date(ed) <= new Date(sd)){ alert('End date must be after start date.'); return; }
+    state.dateRange = {
+      mode: 'date',
+      startDate: sd,
+      endDate: ed,
+      maxBars: parseInt(document.getElementById('dr-max-bars')?.value)||5000,
+    };
+    state.bars = state.dateRange.maxBars;
+  } else {
+    state.dateRange = { mode:'bars', startDate:null, endDate:null, maxBars:5000 };
+    state.bars = parseInt(document.getElementById('bars-input').value)||2000;
+  }
+  chartOffset=0; chartZoom=1;
   closeModal('timeframe');
   await loadChartData();
 }
@@ -6119,7 +6380,19 @@ function runBacktest(){
   closeModal('backtest');
   // Snapshot current backtest settings for post-run display
   state._lastBtSettingsSnap = JSON.parse(JSON.stringify(state.backtestSettings));
-  const data=state.priceData;
+
+  // ── Replay mode: limit backtest to visible bars only ──
+  const replayActive = state.replay?.active;
+  const replayCutoff = replayActive ? (state.replay.currentBar + 1) : null;
+  const data = replayCutoff != null
+    ? state.priceData.slice(0, replayCutoff)
+    : state.priceData;
+  if(replayActive){
+    const bar = data[data.length-1];
+    const dateStr = bar?.t ? new Date(bar.t).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'}) : '';
+    console.log(`[SPES] Replay backtest: ${data.length} bars (up to ${dateStr})`);
+  }
+
   const{capital:capital0,risk:riskPct,spread:spreadPips,trailing,allowShort,maxTrades}=state.risk;
 
   // Derive entry signals from strategy builder conditions
@@ -7883,12 +8156,27 @@ async function fetchElfTfData(assetId){
 // ═══════════════════════════════════════════════════════
 async function loadChartData(){
   const id=state.asset, tf=state.tf, bars=state.bars;
+  const dr = state.dateRange || {};
   const isCrypto=!!BINANCE_SYMBOLS[id];
   const source='Twelve Data';
-  showLoading(`Fetching ${id} from ${source}…`);
+
+  // If in replay mode, exit replay first
+  if(state.replay?.active) replayExit();
+
+  const isDateMode = dr.mode === 'date' && dr.startDate && dr.endDate;
+  const loadMsg = isDateMode
+    ? `Fetching ${id} (${dr.startDate} → ${dr.endDate})…`
+    : `Fetching ${id} from ${source}…`;
+
+  showLoading(loadMsg);
   setLoadingProgress(30);
   try{
-    const data=await fetchLiveData(id,tf,bars);
+    let data;
+    if(isDateMode){
+      data = await fetchLiveData(id, tf, dr.maxBars||5000, dr.startDate, dr.endDate);
+    } else {
+      data = await fetchLiveData(id, tf, bars);
+    }
     setLoadingProgress(90);
     state.priceData=data;
     state.backtestRan=false;
@@ -7907,7 +8195,8 @@ async function loadChartData(){
       if(lbl) lbl.textContent=isCrypto&&liveMode?'Live':'Last close';
       if(dot){ dot.style.background=liveMode&&isCrypto?'var(--green)':'var(--accent)'; dot.style.boxShadow='none'; }
     }
-    document.getElementById('tf-label').textContent=`${data.length} bars · ${source}`;
+    const rangeLabel = isDateMode ? `${data.length} bars · ${dr.startDate} → ${dr.endDate}` : `${data.length} bars · ${source}`;
+    document.getElementById('tf-label').textContent=rangeLabel;
     if(liveMode) startRealtime(id);
     // Restore saved Pine/JS indicators from localStorage
     if(!state._indicatorsLoaded){ state._indicatorsLoaded=true; loadIndicatorsFromStorage(); }
@@ -7929,8 +8218,282 @@ async function loadChartData(){
 }
 
 // ═══════════════════════════════════════════════════════
-// INIT
+// REPLAY ENGINE
 // ═══════════════════════════════════════════════════════
+let _replayTimer = null;
+let _replayDragging = false;
+
+function replaySetStart(){
+  const data = state.priceData;
+  if(!data || data.length < 4){
+    showError('Load chart data before setting a replay start point.');
+    return;
+  }
+
+  // Determine the leftmost visible bar as the start point
+  const visible = Math.floor(data.length / chartZoom);
+  const start   = Math.max(0, Math.min(data.length - visible, Math.floor(chartOffset)));
+
+  // Need at least 2 bars before the start point for indicators to warm up,
+  // but the replay current bar begins at `start` (first bar shown)
+  const startBar = Math.max(1, start);
+
+  // Activate replay
+  state.replay = {
+    active:     true,
+    startBar,
+    currentBar: startBar,
+    totalBars:  data.length,
+  };
+
+  // Show the replay bar UI
+  document.getElementById('replay-bar').classList.add('active');
+  document.getElementById('replay-mode-badge').style.display = 'block';
+  const setBtn = document.getElementById('btn-replay-set');
+  if(setBtn) setBtn.classList.add('armed');
+
+  // Reset play button
+  const playBtn = document.getElementById('replay-play-btn');
+  if(playBtn){ playBtn.textContent = '▶'; playBtn.classList.remove('playing'); }
+
+  // Zoom to show a comfortable window ending at startBar
+  const windowSize = Math.min(80, Math.floor(data.length * 0.15));
+  chartZoom = Math.max(1, data.length / windowSize);
+  chartOffset = Math.max(0, startBar - Math.floor(windowSize * 0.7));
+
+  replayUpdateUI();
+  replayApplyVeil();
+  drawChart();
+}
+
+function replayStep(delta){
+  if(!state.replay?.active) return;
+  const r = state.replay;
+  const newBar = Math.max(r.startBar, Math.min(r.totalBars - 1, r.currentBar + delta));
+  if(newBar === r.currentBar) return;
+  r.currentBar = newBar;
+
+  // Auto-scroll: keep the current bar visible near the right side
+  const visible = Math.floor(state.priceData.length / chartZoom);
+  const margin  = Math.max(3, Math.floor(visible * 0.15));
+  if(r.currentBar >= chartOffset + visible - margin){
+    chartOffset = Math.max(0, r.currentBar - visible + margin + 1);
+  }
+  if(r.currentBar < chartOffset + 3){
+    chartOffset = Math.max(0, r.currentBar - 3);
+  }
+
+  replayUpdateUI();
+  replayApplyVeil();
+  drawChart();
+}
+
+function replayTogglePlay(){
+  if(!state.replay?.active) return;
+  const playBtn = document.getElementById('replay-play-btn');
+  if(_replayTimer){
+    // Currently playing — pause
+    clearInterval(_replayTimer);
+    _replayTimer = null;
+    if(playBtn){ playBtn.textContent = '▶'; playBtn.classList.remove('playing'); }
+  } else {
+    // Start playing
+    if(playBtn){ playBtn.textContent = '⏸'; playBtn.classList.add('playing'); }
+    const speed = parseInt(document.getElementById('replay-speed-sel')?.value || 400);
+    _replayTimer = setInterval(()=>{
+      const r = state.replay;
+      if(!r.active || r.currentBar >= r.totalBars - 1){
+        replayPause();
+        return;
+      }
+      replayStep(1);
+    }, speed);
+  }
+}
+
+function replayPause(){
+  if(_replayTimer){ clearInterval(_replayTimer); _replayTimer = null; }
+  const playBtn = document.getElementById('replay-play-btn');
+  if(playBtn){ playBtn.textContent = '▶'; playBtn.classList.remove('playing'); }
+}
+
+function replayUpdateSpeed(){
+  if(!_replayTimer) return;
+  // Re-start at new speed if currently playing
+  replayPause();
+  replayTogglePlay();
+}
+
+function replayExit(){
+  replayPause();
+  state.replay = { active:false, startBar:0, currentBar:0, totalBars:0 };
+
+  document.getElementById('replay-bar').classList.remove('active');
+  document.getElementById('replay-mode-badge').style.display = 'none';
+  document.getElementById('replay-veil').style.display = 'none';
+  const setBtn = document.getElementById('btn-replay-set');
+  if(setBtn) setBtn.classList.remove('armed');
+
+  drawChart();
+}
+
+function replayUpdateUI(){
+  const r = state.replay;
+  if(!r.active) return;
+  const data = state.priceData;
+  const totalVisible = r.totalBars - r.startBar;
+  const current     = r.currentBar - r.startBar + 1;
+  const pct         = totalVisible > 1 ? ((current - 1) / (totalVisible - 1)) * 100 : 0;
+
+  // Counter
+  const counterEl = document.getElementById('replay-counter');
+  if(counterEl) counterEl.textContent = `Bar ${current} / ${totalVisible}`;
+
+  // Date label
+  const dateEl = document.getElementById('replay-date');
+  if(dateEl && data[r.currentBar]?.t){
+    const dt = new Date(data[r.currentBar].t);
+    const tf = state.tf;
+    let label;
+    if(['1m','5m','15m','30m','1h','2h','4h'].includes(tf)){
+      label = dt.toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'2-digit'})
+              +' '+dt.getHours().toString().padStart(2,'0')+':'+dt.getMinutes().toString().padStart(2,'0');
+    } else {
+      label = dt.toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'});
+    }
+    dateEl.textContent = label;
+  }
+
+  // Progress bar + handle
+  const fill   = document.getElementById('replay-progress-fill');
+  const handle = document.getElementById('replay-progress-handle');
+  if(fill)   fill.style.width  = pct + '%';
+  if(handle) handle.style.left = pct + '%';
+}
+
+function replayApplyVeil(){
+  // The veil covers the portion of the canvas to the RIGHT of the current replay bar
+  const r = state.replay;
+  if(!r.active){ document.getElementById('replay-veil').style.display='none'; return; }
+
+  const data = state.priceData;
+  const veil = document.getElementById('replay-veil');
+  if(!veil) return;
+
+  const W       = canvas.clientWidth;
+  const dpr     = devicePixelRatio;
+  const padL    = 60;   // CSS pixels (not dpr-scaled for veil positioning)
+  const padR    = 20;
+  const plotW   = W - padL - padR;
+  const visible = Math.floor(data.length / chartZoom);
+  const start   = Math.max(0, Math.min(data.length - visible, Math.floor(chartOffset)));
+
+  // How many bars into the visible slice is the current replay bar?
+  const barsIntoSlice = r.currentBar - start;
+  const sliceCount    = Math.min(visible, data.length - start);
+
+  if(barsIntoSlice >= sliceCount - 1){
+    // Current bar is at or past right edge — no veil needed
+    veil.style.display = 'none';
+    return;
+  }
+  if(barsIntoSlice < 0){
+    // Entire chart is future — veil covers everything
+    veil.style.display = 'block';
+    veil.style.left    = padL + 'px';
+    veil.style.right   = padR + 'px';
+    veil.style.top     = '0';
+    veil.style.bottom  = '0';
+    return;
+  }
+
+  // X pixel of the RIGHT edge of the current bar's candle
+  const barWidth = plotW / sliceCount;
+  const xRight   = padL + (barsIntoSlice + 1) * barWidth;
+
+  veil.style.display = 'block';
+  veil.style.left    = Math.floor(xRight) + 'px';
+  veil.style.right   = padR + 'px';
+  veil.style.top     = '0';
+  veil.style.bottom  = '0';
+}
+
+// Progress bar drag
+function replayProgressMousedown(e){
+  if(!state.replay?.active) return;
+  _replayDragging = true;
+  replayProgressSeek(e);
+}
+
+function replayProgressSeek(e){
+  const bar = document.getElementById('replay-progress');
+  if(!bar) return;
+  const rect = bar.getBoundingClientRect();
+  const pct  = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+  const r    = state.replay;
+  const newBar = Math.round(r.startBar + pct * (r.totalBars - 1 - r.startBar));
+  r.currentBar = Math.max(r.startBar, Math.min(r.totalBars - 1, newBar));
+  replayUpdateUI();
+  replayApplyVeil();
+  drawChart();
+}
+
+document.addEventListener('mousemove', e=>{
+  if(_replayDragging) replayProgressSeek(e);
+});
+document.addEventListener('mouseup', ()=>{
+  _replayDragging = false;
+});
+
+// Spacebar shortcut for play/pause
+document.addEventListener('keydown', e=>{
+  if(!state.replay?.active) return;
+  if(e.code === 'Space' && e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA'){
+    e.preventDefault();
+    replayTogglePlay();
+  }
+  if(e.code === 'ArrowRight'){ e.preventDefault(); replayStep(1); }
+  if(e.code === 'ArrowLeft'){  e.preventDefault(); replayStep(-1); }
+  if(e.code === 'ArrowRight' && e.shiftKey){ e.preventDefault(); replayStep(10); }
+  if(e.code === 'ArrowLeft'  && e.shiftKey){ e.preventDefault(); replayStep(-10); }
+});
+
+// Override drawChart to respect replay mode (hide future price data)
+const _origDrawChart = drawChart;
+// We'll patch drawChart inline by modifying what slice of priceData is used —
+// handled via replayApplyVeil() which overlays a CSS veil; drawChart itself
+// does NOT need to be patched since priceData always contains all bars and
+// the veil visually hides the future. However we DO re-apply the veil after
+// every drawChart call so the position stays in sync.
+const _drawChartBase = drawChart;
+drawChart = function(){
+  _drawChartBase();
+  if(state.replay?.active) replayApplyVeil();
+};
+
+// ── Date Range Modal initialiser (called when opening timeframe modal) ──
+function initDateRangeModal(){
+  // Restore saved mode
+  const mode = state.dateRange?.mode || 'bars';
+  _drMode = mode;
+  // Set current date values
+  const today = new Date().toISOString().slice(0,10);
+  const edEl = document.getElementById('dr-end-date');
+  const sdEl = document.getElementById('dr-start-date');
+  if(edEl && !edEl.value) edEl.value = state.dateRange?.endDate || today;
+  if(sdEl && !sdEl.value) sdEl.value = state.dateRange?.startDate || '';
+  const maxEl = document.getElementById('dr-max-bars');
+  if(maxEl) maxEl.value = state.dateRange?.maxBars || 5000;
+  const barsEl = document.getElementById('bars-input');
+  if(barsEl) barsEl.value = state.bars || 2000;
+  // Apply mode UI (deferred so DOM is ready)
+  setTimeout(()=> setDateRangeMode(mode), 10);
+  // Wire up date inputs for live estimate
+  if(sdEl) sdEl.addEventListener('change', updateDateRangeEstimate);
+  if(edEl) edEl.addEventListener('change', updateDateRangeEstimate);
+  const maxEl2 = document.getElementById('dr-max-bars');
+  if(maxEl2) maxEl2.addEventListener('change', updateDateRangeEstimate);
+}
 window.addEventListener('resize',resizeCanvas);
 buildSidebar();
 document.getElementById('rp-sl').textContent='30 pips';
