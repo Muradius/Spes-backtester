@@ -1862,38 +1862,98 @@ async function fetchBinance(symbol, tf, bars){
   return klines.map((k,i)=>({o:+k[1],h:+k[2],l:+k[3],c:+k[4],v:+k[5],i,t:k[0]}));
 }
 
-// Twelve Data fetch
+// Twelve Data fetch — paginated to overcome the ~5000 bar per-call cap.
+// Makes multiple requests walking backwards in time, then stitches in order.
 async function fetchTwelveData(assetId, tf, bars, startDate, endDate){
   const symbol   = tdSymbol(assetId);
   const interval = TD_TF[tf] || '1day';
-  const outputsize = Math.min(bars||5000, 5000);
-  let url;
+  const target   = Math.min(bars || 5000, 5000);
+  // Twelve Data intraday cap per call is ~5000 rows but in practice 4500 is safer
+  const PAGE_SIZE = 4500;
+
+  // ── Date range mode (single call with start_date/end_date) ──────────────
   if(startDate || endDate){
-    // Date range mode — pass start_date and/or end_date to Twelve Data
     const params = new URLSearchParams({
-      symbol: symbol,
-      interval,
-      outputsize,
-      apikey: TD_KEY,
-      format: 'JSON',
-      order: 'ASC',
+      symbol, interval,
+      outputsize: Math.min(target, PAGE_SIZE),
+      apikey: TD_KEY, format: 'JSON', order: 'ASC',
     });
-    if(startDate) params.set('start_date', startDate); // e.g. '2022-01-01'
-    if(endDate)   params.set('end_date',   endDate);   // e.g. '2023-12-31'
-    url = `https://api.twelvedata.com/time_series?${params.toString()}`;
-  } else {
-    url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(symbol)}&interval=${interval}&outputsize=${outputsize}&apikey=${TD_KEY}&format=JSON&order=ASC`;
+    if(startDate) params.set('start_date', startDate);
+    if(endDate)   params.set('end_date',   endDate);
+    const res = await fetchWithTimeout(
+      `https://api.twelvedata.com/time_series?${params.toString()}`, 20000);
+    if(!res.ok) throw new Error('Twelve Data HTTP '+res.status);
+    const json = await res.json();
+    if(json.status==='error'){
+      const msg=json.message||'unknown';
+      if(msg.includes('credits')||msg.includes('limit'))
+        throw new Error('Daily limit reached (800/day). Resets at midnight UTC.');
+      throw new Error('Twelve Data: '+msg);
+    }
+    if(!json.values?.length) throw new Error('No data returned for '+symbol);
+    return json.values.map((v,i)=>({
+      o:+v.open, h:+v.high, l:+v.low, c:+v.close, v:+(v.volume||0), i,
+      t: new Date(v.datetime).getTime()
+    }));
   }
-  const res = await fetchWithTimeout(url, 15000);
-  if(!res.ok) throw new Error('Twelve Data HTTP '+res.status);
-  const json = await res.json();
-  if(json.status==='error'){
-    const msg=json.message||'unknown';
-    if(msg.includes('credits')||msg.includes('limit')) throw new Error('Daily limit reached (800/day). Resets at midnight UTC.');
-    throw new Error('Twelve Data: '+msg);
+
+  // ── Bar-count mode: paginate backwards until we have enough ──────────────
+  let allBars = [];
+  let endDateParam = null; // null = "latest available"
+
+  while(allBars.length < target){
+    const needed   = target - allBars.length;
+    const pageSize = Math.min(needed, PAGE_SIZE);
+
+    const params = new URLSearchParams({
+      symbol, interval,
+      outputsize: pageSize,
+      apikey: TD_KEY, format: 'JSON', order: 'DESC', // newest-first for pagination
+    });
+    if(endDateParam) params.set('end_date', endDateParam);
+
+    setLoadingProgress(Math.min(85, 30 + Math.round(allBars.length / target * 55)));
+
+    const res = await fetchWithTimeout(
+      `https://api.twelvedata.com/time_series?${params.toString()}`, 20000);
+    if(!res.ok) throw new Error('Twelve Data HTTP '+res.status);
+    const json = await res.json();
+
+    if(json.status==='error'){
+      const msg=json.message||'unknown';
+      if(msg.includes('credits')||msg.includes('limit'))
+        throw new Error('Daily limit reached (800/day). Resets at midnight UTC.');
+      throw new Error('Twelve Data: '+msg);
+    }
+    if(!json.values?.length) break; // no more data available
+
+    const page = json.values; // already DESC (newest first)
+    allBars = allBars.concat(page); // accumulate (still DESC order)
+
+    // If the API returned fewer than we asked for, we've hit the beginning of history
+    if(page.length < pageSize) break;
+
+    // Set end_date for next page = 1ms before oldest bar in this page
+    // Subtract 1 bar-width to avoid re-fetching the same boundary bar
+    const oldest = new Date(page[page.length - 1].datetime);
+    oldest.setMinutes(oldest.getMinutes() - 1);
+    endDateParam = oldest.toISOString().slice(0, 19).replace('T', ' ');
   }
-  if(!json.values?.length) throw new Error('No data returned for '+symbol);
-  return json.values.map((v,i)=>({
+
+  if(!allBars.length) throw new Error('No data returned for '+symbol);
+
+  // Reverse to ASC order (oldest first), deduplicate, trim to target
+  const seen = new Set();
+  const clean = [];
+  for(let i = allBars.length-1; i >= 0; i--){
+    const dt = allBars[i].datetime;
+    if(seen.has(dt)) continue;
+    seen.add(dt);
+    clean.push(allBars[i]);
+  }
+  // Take the most recent `target` bars
+  const trimmed = clean.slice(Math.max(0, clean.length - target));
+  return trimmed.map((v,i)=>({
     o:+v.open, h:+v.high, l:+v.low, c:+v.close, v:+(v.volume||0), i,
     t: new Date(v.datetime).getTime()
   }));
@@ -8349,7 +8409,7 @@ async function loadChartData(){
   const isDateMode = dr.mode === 'date' && dr.startDate && dr.endDate;
   const loadMsg = isDateMode
     ? `Fetching ${id} (${dr.startDate} → ${dr.endDate})…`
-    : `Fetching ${id} from ${source}…`;
+    : `Fetching ${id} · up to ${bars} bars…`;
 
   showLoading(loadMsg);
   setLoadingProgress(30);
