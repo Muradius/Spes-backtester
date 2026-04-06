@@ -2101,6 +2101,91 @@ function calcATR(data,period){
   const tr=data.map((d,i)=>i===0?d.h-d.l:Math.max(d.h-d.l,Math.abs(d.h-data[i-1].c),Math.abs(d.l-data[i-1].c)));
   return calcRMA(tr,period); // RMA = Wilder's smoothing, matches TradingView ta.atr()
 }
+
+// ── Donchian Low/High ─────────────────────────────────────────────────────
+// Rule 1 — Opposite band: a LOW is confirmed when price later touches the UPPER band.
+//                         a HIGH is confirmed when price later touches the LOWER band.
+// Rule 2 — Same band:     a LOW is confirmed when price touches the LOWER band again
+//                         at a HIGHER price (higher low) → previous touch was the low.
+//                         a HIGH is confirmed when price touches the UPPER band again
+//                         at a LOWER price (lower high) → previous touch was the high.
+// Each mark: { bar: globalBarIndex, price: number, type: 'low'|'high' }
+function calcDCLowHigh(data, period){
+  const n = data.length;
+  // Build Donchian upper/lower for each bar (strictly left-to-right, no look-ahead)
+  const dcUpper = new Array(n).fill(null);
+  const dcLower = new Array(n).fill(null);
+  for(let i = 0; i < n; i++){
+    const s = Math.max(0, i - period + 1);
+    let hi = -Infinity, lo = Infinity;
+    for(let k = s; k <= i; k++){ if(data[k].h > hi) hi = data[k].h; if(data[k].l < lo) lo = data[k].l; }
+    dcUpper[i] = hi;
+    dcLower[i] = lo;
+  }
+
+  let lastTouchDir = null;
+  let candidate    = null;
+  const marks = [];
+
+  for(let i = period - 1; i < n; i++){
+    const bar      = data[i];
+    const upBand   = dcUpper[i];
+    const loBand   = dcLower[i];
+    const touchUpper = bar.h >= upBand;
+    const touchLower = bar.l <= loBand;
+
+    // Both bands touched on the same bar — treat upper as dominant
+    if(touchUpper && touchLower){
+      if(candidate){
+        marks.push({ bar: candidate.bar, price: candidate.price,
+                     type: candidate.dir === 'lower' ? 'low' : 'high' });
+      }
+      candidate    = { bar: i, price: bar.h, dir: 'upper' };
+      lastTouchDir = 'upper';
+      continue;
+    }
+
+    if(touchUpper){
+      if(lastTouchDir === 'lower' && candidate){
+        // Rule 1: opposite band -> confirm previous lower-touch as LOW
+        // The upper-band touch itself becomes the new candidate
+        marks.push({ bar: candidate.bar, price: candidate.price, type: 'low' });
+        candidate    = { bar: i, price: bar.h, dir: 'upper' };
+        lastTouchDir = 'upper';
+      } else if(lastTouchDir === 'upper' && candidate && bar.h < candidate.price){
+        // Rule 2: same band (upper) again but LOWER high -> confirm previous as HIGH
+        // The confirming bar is NOT a new candidate - reset and wait for next real touch
+        marks.push({ bar: candidate.bar, price: candidate.price, type: 'high' });
+        candidate    = null;
+        lastTouchDir = null;
+      } else {
+        candidate    = { bar: i, price: bar.h, dir: 'upper' };
+        lastTouchDir = 'upper';
+      }
+
+    } else if(touchLower){
+      if(lastTouchDir === 'upper' && candidate){
+        // Rule 1: opposite band -> confirm previous upper-touch as HIGH
+        // The lower-band touch itself becomes the new candidate
+        marks.push({ bar: candidate.bar, price: candidate.price, type: 'high' });
+        candidate    = { bar: i, price: bar.l, dir: 'lower' };
+        lastTouchDir = 'lower';
+      } else if(lastTouchDir === 'lower' && candidate && bar.l > candidate.price){
+        // Rule 2: same band (lower) again but HIGHER low -> confirm previous as LOW
+        // The confirming bar is NOT a new candidate - reset and wait for next real touch
+        marks.push({ bar: candidate.bar, price: candidate.price, type: 'low' });
+        candidate    = null;
+        lastTouchDir = null;
+      } else {
+        candidate    = { bar: i, price: bar.l, dir: 'lower' };
+        lastTouchDir = 'lower';
+      }
+    }
+  }
+  // The very last candidate is unconfirmed - intentionally not marked
+  return { marks, dcUpper, dcLower };
+}
+
 // Kaufman Adaptive Moving Average
 function calcKAMA(closes,period,fastN=2,slowN=30){
   const fastSC=2/(fastN+1), slowSC=2/(slowN+1);
@@ -2442,6 +2527,136 @@ function drawChart(){
         if(f){ctx.moveTo(x,y);f=false}else ctx.lineTo(x,y);
       });
       ctx.stroke();ctx.setLineDash([]);
+    });
+  }
+
+  // ── Donchian Low/High ────────────────────────────────────────────────────
+  const dcLhInd = state.indicators.find(i=>i.type==='DC_LH');
+  if(dcLhInd){
+    const dcPeriod  = dcLhInd.params.period    || 20;
+    const showBands = (dcLhInd.params.showBands ?? 1) === 1;
+    const mSize     = (dcLhInd.params.markerSize || 8) * dpr;
+
+    const {marks, dcUpper:dcU, dcLower:dcL} = calcDCLowHigh(data, dcPeriod);
+
+    // ── Optional band lines ──
+    if(showBands){
+      // Upper band
+      ctx.strokeStyle='rgba(0,212,255,0.35)'; ctx.lineWidth=1*dpr; ctx.setLineDash([5*dpr,4*dpr]);
+      ctx.beginPath(); let fb=true;
+      for(let i=start;i<end;i++){
+        if(dcU[i]==null){fb=true;continue;}
+        const x=toX(i-start), y=toY(dcU[i]);
+        if(fb){ctx.moveTo(x,y);fb=false;}else ctx.lineTo(x,y);
+      }
+      ctx.stroke();
+      // Lower band
+      ctx.strokeStyle='rgba(0,212,255,0.35)';
+      ctx.beginPath(); fb=true;
+      for(let i=start;i<end;i++){
+        if(dcL[i]==null){fb=true;continue;}
+        const x=toX(i-start), y=toY(dcL[i]);
+        if(fb){ctx.moveTo(x,y);fb=false;}else ctx.lineTo(x,y);
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // ── Steepness ratio pre-pass ──────────────────────────────────────────
+    // For each confirmed mark, compute X/Y against the previous mark of the
+    // same type. X = price difference, Y = bar distance (time elapsed).
+    // A larger X/Y means a steeper, more significant structural move.
+    const showSteepness  = (dcLhInd.params.showSteepness ?? 1) === 1;
+    const minSteepness   = parseFloat(dcLhInd.params.minSteepness) || 0;
+    const steepnessMap   = new Map(); // mark.bar → {ratio, valid}
+    const lastByType     = {low: null, high: null};
+    marks.forEach(m => {
+      const prev = lastByType[m.type];
+      if(prev !== null){
+        const X     = Math.abs(m.price - prev.price);      // price distance
+        const Y     = Math.max(1, m.bar - prev.bar);       // bar distance (time)
+        const ratio = X / Y;
+        steepnessMap.set(m.bar, {ratio, valid: minSteepness <= 0 || ratio >= minSteepness});
+      } else {
+        steepnessMap.set(m.bar, {ratio: null, valid: true});
+      }
+      lastByType[m.type] = m;
+    });
+
+    // ── Confirmed marks ──
+    // Only draw marks whose bar index falls within the visible window
+    marks.forEach(m=>{
+      if(m.bar < start || m.bar >= end) return;
+
+      // Apply min-steepness filter — skip marks that don't meet the threshold
+      const steep = steepnessMap.get(m.bar);
+      if(steep && !steep.valid) return;
+
+      const xi = m.bar - start;
+      const x  = toX(xi);
+      const isLow = m.type === 'low';
+
+      // The mark sits just below the low candle wick (for lows) or above the high (for highs)
+      const barData = data[m.bar];
+      const y = isLow ? toY(barData.l) + mSize * 1.8 : toY(barData.h) - mSize * 1.8;
+
+      ctx.save();
+
+      // Glow shadow
+      ctx.shadowColor  = isLow ? 'rgba(0,230,118,0.7)' : 'rgba(255,77,109,0.7)';
+      ctx.shadowBlur   = 10 * dpr;
+
+      // Diamond shape
+      ctx.beginPath();
+      ctx.moveTo(x,          y - mSize);   // top
+      ctx.lineTo(x + mSize,  y);           // right
+      ctx.lineTo(x,          y + mSize);   // bottom
+      ctx.lineTo(x - mSize,  y);           // left
+      ctx.closePath();
+      ctx.fillStyle   = isLow ? 'rgba(0,230,118,0.92)' : 'rgba(255,77,109,0.92)';
+      ctx.strokeStyle = isLow ? '#00e676' : '#ff4d6d';
+      ctx.lineWidth   = 1.2 * dpr;
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.shadowBlur = 0;
+
+      // Label  "L" or "H"
+      ctx.fillStyle    = '#000';
+      ctx.font         = `bold ${Math.round(mSize * 0.95)}px Arial`;
+      ctx.textAlign    = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(isLow ? 'L' : 'H', x, y);
+      ctx.textBaseline = 'alphabetic';
+
+      // Price label just below/above the diamond
+      const priceLabel = formatPrice(m.price, state.asset);
+      ctx.font         = `${Math.round(mSize * 0.78)}px Arial`;
+      ctx.fillStyle    = isLow ? 'rgba(0,230,118,0.85)' : 'rgba(255,77,109,0.85)';
+      ctx.fillText(priceLabel, x, isLow ? y + mSize + 9*dpr : y - mSize - 4*dpr);
+
+      // ── Steepness ratio label (X/Y) — TradingView style: plain, small, muted ──
+      if(showSteepness && steep && steep.ratio !== null){
+        const r = steep.ratio;
+        const ratioStr = r >= 100 ? r.toFixed(0)
+                       : r >= 10  ? r.toFixed(1)
+                       : r >= 1   ? r.toFixed(2)
+                       :            r.toFixed(3);
+
+        // Sit just outside the price label with a small gap
+        const labelY = isLow
+          ? y + mSize + 19*dpr
+          : y - mSize - 14*dpr;
+
+        ctx.font         = `${10 * dpr}px Arial`;
+        ctx.textAlign    = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle    = isLow ? 'rgba(0,230,118,0.62)' : 'rgba(255,77,109,0.62)';
+        ctx.fillText(ratioStr, x, labelY);
+        ctx.textBaseline = 'alphabetic';
+      }
+
+      ctx.restore();
     });
   }
 
@@ -4548,6 +4763,13 @@ const IND_DEFS=[
     {name:'atrPeriod',  label:'ATR Period', val:14, type:'int'},
     {name:'dcLength',   label:'Donchian Length', val:20, type:'int'},
     {name:'showDC',     label:'Show Donchian Bands (1=yes 0=no)', val:1, type:'int'},
+  ]},
+  {type:'DC_LH',label:'Donchian Low/High',desc:'Marks confirmed swing lows & highs — a low is confirmed only when price later touches the upper DC band, a high only when price later touches the lower band',params:[
+    {name:'period',        label:'Donchian Period',                  val:20,  type:'int'},
+    {name:'showBands',     label:'Show DC Bands (1=yes 0=no)',        val:1,   type:'int'},
+    {name:'markerSize',    label:'Marker Size (px)',                  val:8,   type:'int'},
+    {name:'showSteepness', label:'Show Steepness Ratio (1=yes 0=no)', val:1,   type:'int'},
+    {name:'minSteepness',  label:'Min Steepness Filter (0=off)',      val:0,   type:'float'},
   ]},
 ];
 const IND_COLORS=['#4d9fff','#00c9ff','#7ec8e3','#36a2eb','#5bc0de','#f0a500','#ff9f40','#ff4d6d','#c778dd','#00e676'];
